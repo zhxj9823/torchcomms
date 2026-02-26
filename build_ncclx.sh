@@ -232,7 +232,11 @@ set -e
 export CMAKE_PREFIX_PATH="$CONDA_PREFIX"
 export LIB_PREFIX="lib64"
 
-BUILDDIR=${BUILDDIR:="${PWD}/build/ncclx"}
+NCCL_HOME=${NCCL_HOME:="${PWD}/comms/ncclx/v2_27"}
+# Derive version-specific build directory from NCCL_HOME to avoid
+# stale artifacts when switching between nccl versions (e.g. v2_27 vs v2_28)
+NCCL_VERSION_DIR=$(basename "$NCCL_HOME")
+BUILDDIR=${BUILDDIR:="${PWD}/build/ncclx_${NCCL_VERSION_DIR}"}
 CUDA_HOME=${CUDA_HOME:="/usr/local/cuda"}
 NVCC_ARCH=${NVCC_ARCH:="a100,h100"}
 
@@ -249,9 +253,8 @@ LIB_SUFFIX=${LIB_SUFFIX:-lib}
 CONDA_INCLUDE_DIR="${CONDA_PREFIX}/include"
 CONDA_LIB_DIR="${CONDA_PREFIX}/lib"
 NCCL_HOOK_LIBS=${NCCL_HOOK_LIBS:=0}
-NCCL_HOME=${NCCL_HOME:="${PWD}/comms/ncclx/stable"}
 BASE_DIR=${BASE_DIR:="${PWD}"}
-CUDARTLIB=cudart_static
+CUDARTLIB=cudart
 THIRD_PARTY_LDFLAGS=""
 
 if [[ -z "${NCCL_BUILD_SKIP_DEPS}" ]]; then
