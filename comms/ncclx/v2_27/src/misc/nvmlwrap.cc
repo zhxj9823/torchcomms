@@ -86,8 +86,8 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       {(void**)&pfn_nvmlShutdown, "nvmlShutdown"},
       {(void**)&pfn_nvmlDeviceGetCount, "nvmlDeviceGetCount"},
       {(void**)&pfn_nvmlDeviceGetCount_v2, "nvmlDeviceGetCount_v2"},
-      {(void**)&pfn_nvmlDeviceGetHandleByPciBusId, "nvmlDeviceGetHandleByPciBusId"},
-      {(void**)&pfn_nvmlDeviceGetHandleByIndex, "nvmlDeviceGetHandleByIndex"},
+      {(void**)&pfn_nvmlDeviceGetHandleByPciBusId, "nvmlDeviceGetHandleByPciBusId_v2"},
+      {(void**)&pfn_nvmlDeviceGetHandleByIndex, "nvmlDeviceGetHandleByIndex_v2"},
       {(void**)&pfn_nvmlDeviceGetIndex, "nvmlDeviceGetIndex"},
       {(void**)&pfn_nvmlErrorString, "nvmlErrorString"},
       {(void**)&pfn_nvmlDeviceGetNvLinkState, "nvmlDeviceGetNvLinkState"},
@@ -138,8 +138,9 @@ ncclResult_t ncclNvmlEnsureInitialized() {
     initResult = ncclInternalError;
     return initResult;
   }
-
+  // INFO(NCCL_INIT, "nvmlDeviceGetCount%s() returned %d devices, ncclNvmlMaxDevices %d", have_v2 ? "_v2" : "", ncclNvmlDeviceCount, ncclNvmlMaxDevices);
   for(int a=0; a < ncclNvmlDeviceCount; a++) {
+    //INFO(NCCL_INIT, "nvmlDeviceGetHandleByIndex(%d)", a);
     res1 = pfn_nvmlDeviceGetHandleByIndex(a, &ncclNvmlDevices[a].handle);
     if (res1 != NVML_SUCCESS) {
       WARN("nvmlDeviceGetHandleByIndex(%d) failed: %s", int(a), pfn_nvmlErrorString(res1));

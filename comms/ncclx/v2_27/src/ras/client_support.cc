@@ -494,7 +494,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
   int nValCounts;
   static int cudaDriver = -1, cudaRuntime = -1;
 
-  TRACE(NCCL_RAS, "RAS: rasClientRunInit: starting");
+  INFO(NCCL_RAS, "RAS: rasClientRunInit: starting");
 
   rasOutReset();
   rasOutAppend("NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX
@@ -550,10 +550,10 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
     }
   } // for (peerIdx)
 
-  TRACE(NCCL_RAS, "RAS: totalNodes %d, nRasPeers %d, totalGpus %d", totalNodes, nRasPeers, totalGpus);
-  TRACE(NCCL_RAS, "RAS: consistentNPeersGlobal %d, consistentNGpusGlobal %d, consistentNGpusNode %d",
+  INFO(NCCL_RAS, "RAS: totalNodes %d, nRasPeers %d, totalGpus %d", totalNodes, nRasPeers, totalGpus);
+  INFO(NCCL_RAS, "RAS: consistentNPeersGlobal %d, consistentNGpusGlobal %d, consistentNGpusNode %d",
         consistentNPeersGlobal, consistentNGpusGlobal, consistentNGpusNode);
-  TRACE(NCCL_RAS, "RAS: firstNPeersGlobal %d, firstNGpusGlobal %d", firstNPeersGlobal, firstNGpusGlobal);
+  INFO(NCCL_RAS, "RAS: firstNPeersGlobal %d, firstNGpusGlobal %d", firstNPeersGlobal, firstNGpusGlobal);
 
   rasOutAppend("Job summary\n"
                "===========\n\n");
@@ -578,7 +578,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
         firstIdx = 0;
       } else { // peerIdx > 0
         if (!ncclSocketsSameNode(&auxRasPeers[peerIdx].peer->addr, &auxRasPeers[peerIdx-1].peer->addr)) {
-          TRACE(NCCL_RAS, "RAS: node %s: nPeers %d",
+          INFO(NCCL_RAS, "RAS: node %s: nPeers %d",
                 ncclSocketToHost(&auxRasPeers[peerIdx].peer->addr, rasLine, sizeof(rasLine)), nPeers);
           for (int i = firstIdx; i < peerIdx; i++) {
             // Go back and update the number of processes of all the elements of that node.
@@ -592,7 +592,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
       } // peerIdx > 0
       if (peerIdx == nRasPeers-1) {
         // Last iteration of the loop.
-        TRACE(NCCL_RAS, "RAS: node %s: nPeers %d",
+        INFO(NCCL_RAS, "RAS: node %s: nPeers %d",
               ncclSocketToHost(&auxRasPeers[peerIdx].peer->addr, rasLine, sizeof(rasLine)), nPeers);
         for (int i = firstIdx; i < nRasPeers; i++) {
           auxRasPeers[i].value = nPeers;
@@ -648,7 +648,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
       // may just as well cache it...
       for (int peerIdx = 0; peerIdx < nRasPeers; peerIdx++) {
         auxRasPeers[peerIdx].value = __builtin_popcountll(auxRasPeers[peerIdx].peer->cudaDevs);
-        TRACE(NCCL_RAS, "RAS: node %s pid %d: nGpus %d",
+        INFO(NCCL_RAS, "RAS: node %s pid %d: nGpus %d",
               ncclSocketToHost(&auxRasPeers[peerIdx].peer->addr, rasLine, sizeof(rasLine)),
               auxRasPeers[peerIdx].peer->pid, auxRasPeers[peerIdx].value);
       }
@@ -747,7 +747,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
     if (!allDone)
       ret = ncclInProgress;
   }
-  TRACE(NCCL_RAS, "RAS: rasClientRunInit: scheduling RAS_COLL_COMMS and finishing");
+  INFO(NCCL_RAS, "RAS: rasClientRunInit: scheduling RAS_COLL_COMMS and finishing");
 exit:
   free(auxRasPeers);
   return ret;
@@ -917,8 +917,8 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     "INCOMPLETE,ERROR,MISMATCH"
   };
 
-  TRACE(NCCL_RAS, "RAS: rasClientRunComms: starting");
-  TRACE(NCCL_RAS, "RAS: coll nLegTimeouts %d, nPeers %d, nData %d; commsData nComms %d",
+  INFO(NCCL_RAS, "RAS: rasClientRunComms: starting");
+  INFO(NCCL_RAS, "RAS: coll nLegTimeouts %d, nPeers %d, nData %d; commsData nComms %d",
         coll->nLegTimeouts, coll->nPeers, coll->nData, commsData->nComms);
 
   if (coll == nullptr || coll->nFwdSent != coll->nFwdRecv) {
@@ -932,7 +932,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
 
   // Calculate the number of missing peers early as we rely on it for other things.
   nPeersMissing = nRasPeers - nRasDeadPeers - coll->nPeers;
-  TRACE(NCCL_RAS, "RAS: nRasPeers %d, nRasDeadPeers %d, nPeersMissing %d", nRasPeers, nRasDeadPeers, nPeersMissing);
+  INFO(NCCL_RAS, "RAS: nRasPeers %d, nRasDeadPeers %d, nPeersMissing %d", nRasPeers, nRasDeadPeers, nPeersMissing);
 
   // Sort the communicators by size.  As the structure is inconvenient to move around due to the elements being
   // of variable length, we create an auxiliary array that includes pointers to individual elements and simply sort
@@ -949,13 +949,13 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     comm = (struct rasCollComms::comm*)(((char*)(comm+1)) + comm->nRanks * sizeof(*comm->ranks));
   }
   NCCLCHECKGOTO(ncclCalloc(&auxCommRanks, maxCommSize), ret, fail);
-  TRACE(NCCL_RAS, "RAS: maxCommSize %d", maxCommSize);
+  INFO(NCCL_RAS, "RAS: maxCommSize %d", maxCommSize);
 
   // For convenience, create a translation table from rasCollective's peerIdx to rasPeers peerIdx.
   NCCLCHECKGOTO(ncclCalloc(&peerIdxConv, coll->nPeers), ret, fail);
   for (int peerIdx = 0; peerIdx < coll->nPeers; peerIdx++) {
     peerIdxConv[peerIdx] = rasPeerFind(coll->peers+peerIdx);
-    TRACE(NCCL_RAS, "RAS: coll peers[%d] -> rasPeers[%d]", peerIdx, peerIdxConv[peerIdx]);
+    INFO(NCCL_RAS, "RAS: coll peers[%d] -> rasPeers[%d]", peerIdx, peerIdxConv[peerIdx]);
   }
   // Sort coll->peers to match the ordering of rasPeers -- we may need it later...
   qsort(coll->peers, coll->nPeers, sizeof(*coll->peers), &ncclSocketsCompare);
@@ -965,7 +965,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     struct rasAuxComm* auxComm = auxComms+commIdx;
     int nRanks = 0;
     comm = auxComm->comm;
-    TRACE(NCCL_RAS, "RAS: coll comms[%d]: commId (0x%lx, 0x%lx, 0x%lx), commNRanks %d, nRanks %d, nMissingRanks %d",
+    INFO(NCCL_RAS, "RAS: coll comms[%d]: commId (0x%lx, 0x%lx, 0x%lx), commNRanks %d, nRanks %d, nMissingRanks %d",
           commIdx, comm->commId.commHash, comm->commId.hostHash, comm->commId.pidHash,
           comm->commNRanks, comm->nRanks, comm->nMissingRanks);
 
@@ -996,7 +996,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
             auxComm->errors |= RAS_ACE_INCOMPLETE;
             auxComm->nIncompleteRanks++;
           }
-          TRACE(NCCL_RAS, "RAS: comm missingRank[%d] commRank %d, addr %td (-> %d), cudaDev %d, nvmlDev %d",
+          INFO(NCCL_RAS, "RAS: comm missingRank[%d] commRank %d, addr %td (-> %d), cudaDev %d, nvmlDev %d",
                 rankIdx, missingRank->commRank, (found ? ((union ncclSocketAddress*)found) - coll->peers: -1),
                 rasPeerFind(&missingRank->addr), missingRank->cudaDev, missingRank->nvmlDev);
         } // for (rankIdx)
@@ -1009,12 +1009,12 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
       struct rasCollComms::comm::rank* rank = comm->ranks+rankIdx;
       auxCommRanks[rankIdx].rank = rank;
       auxCommRanks[rankIdx].value = peerIdxConv[rank->peerIdx];
-      TRACE(NCCL_RAS, "RAS: comm rank[%d] commRank %d, peerIdx %d (-> %d), cudaDev %d, nvmlDev %d",
+      INFO(NCCL_RAS, "RAS: comm rank[%d] commRank %d, peerIdx %d (-> %d), cudaDev %d, nvmlDev %d",
             rankIdx, rank->commRank, rank->peerIdx, peerIdxConv[rank->peerIdx], rank->cudaDev, rank->nvmlDev);
-      TRACE(NCCL_RAS, "RAS: comm rank[%d] collOpCounts (%ld, %ld, %ld, %ld, %ld)",
+      INFO(NCCL_RAS, "RAS: comm rank[%d] collOpCounts (%ld, %ld, %ld, %ld, %ld)",
             rankIdx, rank->collOpCounts[0], rank->collOpCounts[1], rank->collOpCounts[2], rank->collOpCounts[3],
             rank->collOpCounts[4]);
-      TRACE(NCCL_RAS, "RAS: comm rank[%d] status initState %d, asyncError %d, finalizeCalled %d, destroyFlag %d, "
+      INFO(NCCL_RAS, "RAS: comm rank[%d] status initState %d, asyncError %d, finalizeCalled %d, destroyFlag %d, "
             "abortFlag %d", rankIdx, rank->status.initState, rank->status.asyncError, rank->status.finalizeCalled,
             rank->status.destroyFlag, rank->status.abortFlag); /**/
     }
@@ -1080,9 +1080,9 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
       // We've got a status mismatch between ranks.
       auxComm->errors |= RAS_ACE_MISMATCH;
     }
-    TRACE(NCCL_RAS, "RAS: auxComm nPeers %d, nNodes %d, nIncompleteRanks %d",
+    INFO(NCCL_RAS, "RAS: auxComm nPeers %d, nNodes %d, nIncompleteRanks %d",
           auxComm->nPeers, auxComm->nNodes, auxComm->nIncompleteRanks);
-    TRACE(NCCL_RAS, "RAS: auxComm ranksPerNodeMin %d, ranksPerNodeMax %d, status 0x%x, errors 0x%x",
+    INFO(NCCL_RAS, "RAS: auxComm ranksPerNodeMin %d, ranksPerNodeMax %d, status 0x%x, errors 0x%x",
           auxComm->ranksPerNodeMin, auxComm->ranksPerNodeMax, auxComm->status, auxComm->errors);
   } // for (commIdx)
   // Sort it by size/nNodes/status/errors/missing ranks.
@@ -1109,7 +1109,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     }
   }
 
-  TRACE(NCCL_RAS, "RAS: rasClientRunComms: done with initial data processing");
+  INFO(NCCL_RAS, "RAS: rasClientRunComms: done with initial data processing");
 
   if (commsData->nComms > 0) {
     rasOutAppend("Group     Comms     Nodes     Ranks     Ranks     Ranks    Status  Errors\n"
@@ -1202,7 +1202,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
                    nPeersBuf, rasPeerIdx, ncclSocketToString(&rasPeers[rasPeerIdx].addr, rasLine), collPeerIdx);
             }
           }
-          TRACE(NCCL_RAS, "RAS rasPeerIdx %d (%s) is missing from coll->peers; dead %d",
+          INFO(NCCL_RAS, "RAS rasPeerIdx %d (%s) is missing from coll->peers; dead %d",
                 rasPeerIdx, ncclSocketToString(&rasPeers[rasPeerIdx].addr, rasLine), dead);
           rasPeerIdx++;
         } else { // cmp > 0
@@ -1576,7 +1576,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
   rasClientEnqueueMsg(client, msg, msgLen);
   msg = nullptr;
 
-  TRACE(NCCL_RAS, "RAS: rasClientRunComms: finishing");
+  INFO(NCCL_RAS, "RAS: rasClientRunComms: finishing");
 exit:
   free(peerNvmlDevs);
   free(collOpCounts);

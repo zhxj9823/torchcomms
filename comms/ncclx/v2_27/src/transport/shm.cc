@@ -81,11 +81,11 @@ static ncclResult_t shmCanConnect(int* ret, struct ncclComm* comm, struct ncclTo
   if (useNet) return ncclSuccess;
 
   // Same host?
-  TRACE(NCCL_INIT|NCCL_SHM, "peer1 hostHash %lx peer2 hostHash %lx", info1->hostHash, info2->hostHash);
+  INFO(NCCL_INIT|NCCL_SHM, "peer1 hostHash %lx peer2 hostHash %lx", info1->hostHash, info2->hostHash);
   if (info1->hostHash != info2->hostHash) return ncclSuccess;
 
   // Common /dev/shm (between containers) ?
-  TRACE(NCCL_INIT|NCCL_SHM, "peer1 shmDev %lx peer2 shmDev %lx", info1->shmDev, info2->shmDev);
+  INFO(NCCL_INIT|NCCL_SHM, "peer1 shmDev %lx peer2 shmDev %lx", info1->shmDev, info2->shmDev);
   if (info1->shmDev != info2->shmDev) return ncclSuccess;
 
   *ret = 1;

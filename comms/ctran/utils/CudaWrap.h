@@ -135,15 +135,15 @@ namespace ctran::utils {
 
 #else
 
-#define FB_CUPFN(symbol) ::ctran::utils::pfn_##symbol
+#define FB_CUPFN(symbol) symbol
 
-// Check CUDA PFN driver calls
+// Check CUDA driver calls (NEX CPU emulation - direct function calls)
 #define FB_CUCHECK(cmd)                                                  \
   do {                                                                   \
-    CUresult err = ::ctran::utils::pfn_##cmd;                            \
+    CUresult err = cmd;                                                  \
     if (err != CUDA_SUCCESS) {                                           \
       const char* errStr;                                                \
-      (void)::ctran::utils::pfn_cuGetErrorString(err, &errStr);          \
+      (void)cuGetErrorString(err, &errStr);                              \
       CLOGF(ERR, "Cuda failure {} '{}'", static_cast<int>(err), errStr); \
       ErrorStackTraceUtil::logErrorMessage(                              \
           "Cuda Error: " + std::string(errStr));                         \
@@ -153,10 +153,10 @@ namespace ctran::utils {
 
 #define FB_CUCHECK_RETURN(cmd, ret)                                      \
   do {                                                                   \
-    CUresult err = ::ctran::utils::pfn_##cmd;                            \
+    CUresult err = cmd;                                                  \
     if (err != CUDA_SUCCESS) {                                           \
       const char* errStr;                                                \
-      (void)::ctran::utils::pfn_cuGetErrorString(err, &errStr);          \
+      (void)cuGetErrorString(err, &errStr);                              \
       CLOGF(ERR, "Cuda failure {} '{}'", static_cast<int>(err), errStr); \
       ErrorStackTraceUtil::logErrorMessage(                              \
           "Cuda Error: " + std::string(errStr));                         \
@@ -166,10 +166,10 @@ namespace ctran::utils {
 
 #define FB_CUCHECK_GOTO(cmd, ret, label)                                 \
   do {                                                                   \
-    CUresult err = ::ctran::utils::pfn_##cmd;                            \
+    CUresult err = cmd;                                                  \
     if (err != CUDA_SUCCESS) {                                           \
       const char* errStr;                                                \
-      (void)::ctran::utils::pfn_cuGetErrorString(err, &errStr);          \
+      cuGetErrorString(err, &errStr);                                    \
       CLOGF(ERR, "Cuda failure {} '{}'", static_cast<int>(err), errStr); \
       ErrorStackTraceUtil::logErrorMessage(                              \
           "Cuda Error: " + std::string(errStr));                         \
@@ -178,54 +178,54 @@ namespace ctran::utils {
     }                                                                    \
   } while (false)
 
-#define FB_CUCHECKRES(res)                                      \
-  do {                                                          \
-    if (res != CUDA_SUCCESS) {                                  \
-      const char* errStr;                                       \
-      (void)::ctran::utils::pfn_cuGetErrorString(res, &errStr); \
-      CLOGF(ERR, "Cuda failure {} '{}'", res, errStr);          \
-      return ErrorStackTraceUtil::log(commUnhandledCudaError);  \
-    }                                                           \
+#define FB_CUCHECKRES(res)                                     \
+  do {                                                         \
+    if (res != CUDA_SUCCESS) {                                 \
+      const char* errStr;                                      \
+      (void)cuGetErrorString(res, &errStr);                    \
+      CLOGF(ERR, "Cuda failure {} '{}'", res, errStr);         \
+      return ErrorStackTraceUtil::log(commUnhandledCudaError); \
+    }                                                          \
   } while (false)
 
 // Report failure but clear error and continue
-#define FB_CUCHECKIGNORE(cmd)                                   \
-  do {                                                          \
-    CUresult err = ::ctran::utils::pfn_##cmd;                   \
-    if (err != CUDA_SUCCESS) {                                  \
-      const char* errStr;                                       \
-      (void)::ctran::utils::pfn_cuGetErrorString(err, &errStr); \
-      CLOGF(                                                    \
-          WARN,                                                 \
-          "{}:{} Cuda failure {} '{}'",                         \
-          __FILE__,                                             \
-          __LINE__,                                             \
-          static_cast<int>(err),                                \
-          errStr);                                              \
-    }                                                           \
+#define FB_CUCHECKIGNORE(cmd)               \
+  do {                                      \
+    CUresult err = cmd;                     \
+    if (err != CUDA_SUCCESS) {              \
+      const char* errStr;                   \
+      (void)cuGetErrorString(err, &errStr); \
+      CLOGF(                                \
+          WARN,                             \
+          "{}:{} Cuda failure {} '{}'",     \
+          __FILE__,                         \
+          __LINE__,                         \
+          static_cast<int>(err),            \
+          errStr);                          \
+    }                                       \
   } while (false)
 
-#define FB_CUCHECKTHREAD(cmd, args)           \
-  do {                                        \
-    CUresult err = ::ctran::utils::pfn_##cmd; \
-    if (err != CUDA_SUCCESS) {                \
-      CLOGF(                                  \
-          ERR,                                \
-          "{}:{} -> {} [Async thread]",       \
-          __FILE__,                           \
-          __LINE__,                           \
-          static_cast<int>(err));             \
-      args->ret = commUnhandledCudaError;     \
-      return args;                            \
-    }                                         \
+#define FB_CUCHECKTHREAD(cmd, args)       \
+  do {                                    \
+    CUresult err = cmd;                   \
+    if (err != CUDA_SUCCESS) {            \
+      CLOGF(                              \
+          ERR,                            \
+          "{}:{} -> {} [Async thread]",   \
+          __FILE__,                       \
+          __LINE__,                       \
+          static_cast<int>(err));         \
+      args->ret = commUnhandledCudaError; \
+      return args;                        \
+    }                                     \
   } while (0)
 
-#define FB_DECLARE_CUDA_PFN_EXTERN(symbol, version) \
-  extern PFN_##symbol##_v##version pfn_##symbol
+#define FB_DECLARE_CUDA_PFN_EXTERN(symbol, version) // extern PFN_##symbol##_v##version pfn_##symbol
 
 #if CUDART_VERSION >= 11030
-/* CUDA Driver functions loaded with cuGetProcAddress for versioning */
-FB_DECLARE_CUDA_PFN_EXTERN(cuDeviceGet, 2000);
+// CUDA Driver functions - using external declarations for NEX CPU emulation
+// PFN function pointer declarations are not needed; symbols resolved via nex_cuda.so
+/*
 FB_DECLARE_CUDA_PFN_EXTERN(cuDeviceGetAttribute, 2000);
 FB_DECLARE_CUDA_PFN_EXTERN(cuGetErrorString, 6000);
 FB_DECLARE_CUDA_PFN_EXTERN(cuGetErrorName, 6000);
@@ -259,7 +259,7 @@ FB_DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange, 11070);
 FB_DECLARE_CUDA_PFN_EXTERN(cuStreamWaitValue64, 11070);
 #endif
 #if CUDA_VERSION >= 12010
-/* NVSwitch Multicast support */
+// NVSwitch Multicast support
 FB_DECLARE_CUDA_PFN_EXTERN(cuMulticastAddDevice, 12010);
 FB_DECLARE_CUDA_PFN_EXTERN(cuMulticastBindMem, 12010);
 FB_DECLARE_CUDA_PFN_EXTERN(cuMulticastBindAddr, 12010);
@@ -267,6 +267,7 @@ FB_DECLARE_CUDA_PFN_EXTERN(cuMulticastCreate, 12010);
 FB_DECLARE_CUDA_PFN_EXTERN(cuMulticastGetGranularity, 12010);
 FB_DECLARE_CUDA_PFN_EXTERN(cuMulticastUnbind, 12010);
 #endif
+*/
 #endif
 
 #endif

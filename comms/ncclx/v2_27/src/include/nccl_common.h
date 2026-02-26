@@ -7,6 +7,7 @@
 #ifndef NCCL_DEBUG_H_
 #define NCCL_DEBUG_H_
 
+#include "cuda_emulator.hh"
 #include <cstdint>
 
 typedef enum {

@@ -333,7 +333,8 @@ static commResult_t
 waitSignalDriverApi(int peer, CtranWin* win, cudaStream_t stream) {
 #if CUDART_VERSION >= 11070
   // Check if hardware wait is available at runtime
-  if (FB_CUPFN(cuStreamWaitValue64) == nullptr) {
+  // Note: With external declarations, function addresses are always non-null
+  if (false) {
     return commInternalError;
   }
 

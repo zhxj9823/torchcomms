@@ -83,10 +83,10 @@ ncclResult_t nvlsGroupConnect(struct ncclComm *comm, char *shareableHandle, int 
   // Import and map the remote memory descriptor to the local GPU
   if (type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
     // cuMem UDS support
-    TRACE(NCCL_NVLS, "NVLS rank %d Importing shareable handle %p from rank %d", comm->localRank, shareableHandle, rank);
-    TRACE(NCCL_NVLS, "NVLS rank %d request conversion of handle 0x%lx from rank %d", comm->localRank, *(uint64_t*)shareableHandle, rank);
+    INFO(NCCL_NVLS, "NVLS rank %d Importing shareable handle %p from rank %d", comm->localRank, shareableHandle, rank);
+    INFO(NCCL_NVLS, "NVLS rank %d request conversion of handle 0x%lx from rank %d", comm->localRank, *(uint64_t*)shareableHandle, rank);
     NCCLCHECKGOTO(ncclProxyClientGetFdBlocking(comm, rank, shareableHandle, &fd), ret, fail);
-    TRACE(NCCL_NVLS, "NVLS rank %d received converted fd %d from rank %d", comm->localRank, fd, rank);
+    INFO(NCCL_NVLS, "NVLS rank %d received converted fd %d from rank %d", comm->localRank, fd, rank);
     CUCHECKGOTO(cuMemImportFromShareableHandle(mcHandle, (void *)(uintptr_t)fd, type), ret, fail);
     SYSCHECK(close(fd), "close");
   } else {
@@ -163,14 +163,13 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
   CUdevice dev;
   int driverVersion;
 
-  if (CUPFN(cuDeviceGet) == NULL) return ncclSuccess;
+  // Note: Functions are always available with external declarations
   CUCHECK(cuCtxGetDevice(&dev));
   CUDACHECK(cudaDriverGetVersion(&driverVersion));
   if (NCCL_NVLS_ENABLE == 2) {
     // NVLS Multicast support requires CUDA12.1 UMD + KMD
-    if (CUPFN(cuMulticastCreate) != NULL /*&& driverVersion >= 12010 */) {
-      CUCHECK(cuDeviceGetAttribute(&comm->nvlsSupport, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, dev));
-    }
+    // Note: Function is always available with external declarations
+    cuDeviceGetAttribute(&comm->nvlsSupport, CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED, dev);
   } else {
     comm->nvlsSupport = 1;
   }
@@ -282,10 +281,10 @@ static ncclResult_t nvlsAllocateMem(struct ncclComm* comm, const CUmemAccessDesc
   // NB: It will block until all ranks have been added to the Group
   // This is where we normally see issues if the system NVLS/Multicast support is broken
   {
-    CUresult err = CUPFN(cuMulticastBindMem(*mcHandle, 0/*mcOffset*/, *ucHandle, 0/*memOffset*/, ucsize, 0/*flags*/));
+    CUresult err = cuMulticastBindMem(*mcHandle, 0/*mcOffset*/, *ucHandle, 0/*memOffset*/, ucsize, 0/*flags*/);
     if (err != CUDA_SUCCESS) {
-      const char *errStr;						\
-      (void) pfn_cuGetErrorString(err, &errStr);			\
+      const char *errStr;
+      (void) cuGetErrorString(err, &errStr);
       if (NCCL_NVLS_ENABLE == 1) {
         // Fail the job as NVLS support is not available
         WARN("Failed to bind NVLink SHARP (NVLS) Multicast memory of size %ld : CUDA error %d '%s'.\nThis is usually caused by a system or configuration error in the Fabric Manager or NVSwitches.\nDo not force-enable NVLS (NCCL_NVLS_ENABLE=1) if you wish to avoid this error in the future.", ucsize, err, errStr );

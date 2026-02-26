@@ -48,7 +48,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket *handle, int rank, uint64_t hash, v
   unlink(temp);
 #endif
 
-  TRACE(NCCL_INIT, "UDS: Creating socket %s", temp);
+  INFO(NCCL_INIT, "UDS: Creating socket %s", temp);
 
   strncpy(cliaddr.sun_path, temp, len);
 #ifdef USE_ABSTRACT_SOCKET
@@ -148,7 +148,7 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
       WARN("UDS: Receiving data over socket %s failed", handle->socketName);
       return ncclSystemError;
     }
-    TRACE(NCCL_INIT|NCCL_P2P, "UDS: Got recvFd %d from socket %s", *recvFd, handle->socketName);
+    INFO(NCCL_INIT|NCCL_P2P, "UDS: Got recvFd %d from socket %s", *recvFd, handle->socketName);
   }
 
   return ncclSuccess;
@@ -187,7 +187,7 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket *handle, void *hdr, int hdrLen, 
   cliaddr.sun_path[0] = '\0'; // Linux abstract socket trick
 #endif
 
-  TRACE(NCCL_INIT, "UDS: Sending hdr %p len %d fd %d to UDS socket %s", hdr, hdrLen, sendFd, temp);
+  INFO(NCCL_INIT, "UDS: Sending hdr %p len %d fd %d to UDS socket %s", hdr, hdrLen, sendFd, temp);
 
   if (sendFd != -1) {
     memset(&control_un, '\0', sizeof(control_un));

@@ -538,14 +538,16 @@ __host__ __device__ constexpr int ncclShmemDynamicSize(int cudaArch = NCCL_CUDA_
   return cudaArch < 700 ? 0 : ncclShmemScratchWarpSize(cudaArch)*(NCCL_MAX_NTHREADS/WARP_SIZE);
 }
 
-// Host-side table of kernel function pointers.
-extern int const ncclDevKernelCount;
-extern void* const ncclDevKernelList[/*ncclDevKernelCount*/];
+extern "C" {
+  // Host-side table of kernel function pointers.
+  extern int const ncclDevKernelCount;
+  extern void* const ncclDevKernelList[/*ncclDevKernelCount*/];
 
-// Table of most specialized kernel function to run given func index.
-extern int const ncclDevFuncRowToId[];
-extern void* const ncclDevKernelForFunc[/*funcIndex*/];
-extern bool const ncclDevKernelForFuncIsSpecialized[/*funcIndex*/];
+  // Table of most specialized kernel function to run given func index.
+  extern int const ncclDevFuncRowToId[];
+  extern void* const ncclDevKernelForFunc[/*funcIndex*/];
+  extern bool const ncclDevKernelForFuncIsSpecialized[/*funcIndex*/];
+}
 
 // Launch a one-rank reduction on stream.
 ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct ncclDevRedOpFull redOp, ncclDataType_t type, cudaStream_t stream);

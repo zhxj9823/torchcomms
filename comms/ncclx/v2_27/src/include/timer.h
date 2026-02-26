@@ -9,6 +9,7 @@
 #if ENABLE_TIMER
 #include <unistd.h>
 #include <sys/time.h>
+#include <time.h>
 #include <x86intrin.h>
 static double freq = -1;
 static void calibrate() {
@@ -24,8 +25,9 @@ static void calibrate() {
   freq = timeCycles/time;
 }
 static inline double gettime() {
-  if (freq == -1) calibrate();
-  return __rdtsc()/freq;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1000000.0 + ts.tv_nsec / 1000.0;  // return microseconds
 }
 static uint64_t counts[8];
 static double times[8];

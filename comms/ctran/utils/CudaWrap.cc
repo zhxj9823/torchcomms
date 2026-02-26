@@ -73,62 +73,21 @@
 
 namespace ctran::utils {
 
-#define DECLARE_CUDA_PFN(symbol, version) \
-  PFN_##symbol##_v##version pfn_##symbol = nullptr
+#define DECLARE_CUDA_PFN(symbol, version) // PFN_##symbol##_v##version pfn_##symbol = nullptr
 
 #if CUDART_VERSION >= 11030
-/* CUDA Driver functions loaded with cuGetProcAddress for versioning */
-DECLARE_CUDA_PFN(cuDeviceGet, 2000);
-DECLARE_CUDA_PFN(cuDeviceGetAttribute, 2000);
-DECLARE_CUDA_PFN(cuGetErrorString, 6000);
-DECLARE_CUDA_PFN(cuGetErrorName, 6000);
-DECLARE_CUDA_PFN(cuMemGetAddressRange, 3020);
-DECLARE_CUDA_PFN(cuLaunchKernel, 4000);
-DECLARE_CUDA_PFN(cuMemHostGetDevicePointer, 3020);
-#if CUDA_VERSION >= 11080
-DECLARE_CUDA_PFN(cuLaunchKernelEx, 11060);
-#endif
-DECLARE_CUDA_PFN(cuCtxCreate, 11040);
-DECLARE_CUDA_PFN(cuCtxDestroy, 4000);
-DECLARE_CUDA_PFN(cuCtxGetCurrent, 4000);
-DECLARE_CUDA_PFN(cuCtxSetCurrent, 4000);
-DECLARE_CUDA_PFN(cuCtxGetDevice, 2000);
-DECLARE_CUDA_PFN(cuMemAddressReserve, 10020);
-DECLARE_CUDA_PFN(cuMemAddressFree, 10020);
-DECLARE_CUDA_PFN(cuMemCreate, 10020);
-DECLARE_CUDA_PFN(cuMemGetAllocationGranularity, 10020);
-DECLARE_CUDA_PFN(cuMemExportToShareableHandle, 10020);
-DECLARE_CUDA_PFN(cuMemImportFromShareableHandle, 10020);
-DECLARE_CUDA_PFN(cuMemMap, 10020);
-DECLARE_CUDA_PFN(cuMemRelease, 10020);
-DECLARE_CUDA_PFN(cuMemRetainAllocationHandle, 11000);
-DECLARE_CUDA_PFN(cuMemSetAccess, 10020);
-DECLARE_CUDA_PFN(cuMemGetAccess, 10020);
-DECLARE_CUDA_PFN(cuMemUnmap, 10020);
-DECLARE_CUDA_PFN(cuMemGetAllocationPropertiesFromHandle, 10020);
-DECLARE_CUDA_PFN(cuPointerGetAttribute, 4000);
-#if CUDA_VERSION >= 11070
-DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
-#endif
-#if CUDA_VERSION >= 12010
-/* NVSwitch Multicast support */
-DECLARE_CUDA_PFN(cuMulticastAddDevice, 12010);
-DECLARE_CUDA_PFN(cuMulticastBindMem, 12010);
-DECLARE_CUDA_PFN(cuMulticastBindAddr, 12010);
-DECLARE_CUDA_PFN(cuMulticastCreate, 12010);
-DECLARE_CUDA_PFN(cuMulticastGetGranularity, 12010);
-DECLARE_CUDA_PFN(cuMulticastUnbind, 12010);
-#endif
-/* Stream MemOp support */
-DECLARE_CUDA_PFN(cuStreamBatchMemOp, 11070);
-DECLARE_CUDA_PFN(cuStreamWaitValue32, 11070);
-DECLARE_CUDA_PFN(cuStreamWaitValue64, 11070);
-DECLARE_CUDA_PFN(cuStreamWriteValue32, 11070);
-DECLARE_CUDA_PFN(cuStreamWriteValue64, 11070);
+// CUDA Driver functions - using external declarations for NEX CPU emulation
+// PFN function pointer definitions are not needed; symbols resolved via nex_cuda.so
 #endif
 
 bool getCuMemSysSupported() {
-  static bool cuMemSupported = isCuMemSupported();
+  static bool cuMemSupported = []{
+    // Respect NCCL_CUMEM_ENABLE: 0 = force off, -2 = auto-detect, 1 = force on
+    int64_t param = NCCL_CUMEM_ENABLE;
+    if (param == 0) return false;
+    bool hwSupported = isCuMemSupported();
+    return param >= 1 ? hwSupported : /* auto-detect (-2) */ hwSupported;
+  }();
   return cuMemSupported;
 }
 
@@ -151,6 +110,7 @@ bool isCuMemSupported() {
   }
   FB_CUDACHECK_RETURN(cudaGetDevice(&cudaDev), false);
   if (FB_CUPFN(cuMemCreate) == nullptr) {
+    // Note: With external declarations, function address is always non-null
     return false;
   }
   FB_CUCHECK_RETURN(cuDeviceGet(&currentDev, cudaDev), false);
@@ -191,6 +151,8 @@ inline bool isCuMemHostSupported(int driverVersion) {
 #endif
 }
 
+// cudaPfnFuncLoader - Not needed when using external declarations for NEX
+#if 0
 static commResult_t cudaPfnFuncLoader(void) {
 #if defined(__HIP_PLATFORM_AMD__)
   // AMD doesn't use dynamic loading for cuda driver APIs
@@ -252,6 +214,7 @@ static commResult_t cudaPfnFuncLoader(void) {
   return commSuccess;
 #endif
 }
+#endif
 
 static std::once_flag commCudaLibraryInitFlag;
 static commResult_t commCudaLibraryInitResult;
@@ -268,10 +231,11 @@ static commResult_t initCommCudaLibraryOnce_() {
 #ifdef CUDART_VERSION
   CLOGF_SUBSYS(INFO, INIT, "CUDART_VERSION {}", CUDART_VERSION);
 #endif
-  if (cudaPfnFuncLoader() != commSuccess) {
-    CLOGF(WARN, "CUDA some PFN functions not found in the library");
-    return commCudaLibraryInitResult;
-  }
+  // Using external function declarations instead of dynamic loading for NEX
+  // if (cudaPfnFuncLoader() != commSuccess) {
+  //   CLOGF(WARN, "CUDA some PFN functions not found in the library");
+  //   return commCudaLibraryInitResult;
+  // }
   auto cuMemSupported = isCuMemSupported();
   // To use cuMem* for host memory allocation, we need to create context on
   // each visible device. This is a workaround needed in CUDA 12.2 and
@@ -308,7 +272,8 @@ commResult_t dmaBufDriverSupport(int cudaDev) {
   CUdevice dev;
   int cudaDriverVersion;
   FB_CUDACHECK(cudaDriverGetVersion(&cudaDriverVersion));
-  if (FB_CUPFN(cuDeviceGet) == NULL || cudaDriverVersion < 11070) {
+  // Note: With external declarations, function addresses are always non-null
+  if (cudaDriverVersion < 11070) {
     return commInternalError;
   }
   FB_CUCHECK(cuDeviceGet(&dev, cudaDev));

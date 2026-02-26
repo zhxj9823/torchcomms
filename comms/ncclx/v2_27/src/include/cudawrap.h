@@ -13,6 +13,44 @@
 
 #include "comms/ctran/utils/ErrorStackTraceUtil.h"
 
+// External CUDA Driver API functions for NEX CPU emulation interception
+// These are resolved at link/load time via nex_cuda.so (LD_PRELOAD) instead of
+// using cudaGetDriverEntryPoint which doesn't work under NEX.
+extern CUresult cuDeviceGet(CUdevice *device, int ordinal);
+extern CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
+extern CUresult cuGetErrorString(CUresult error, const char **pStr);
+extern CUresult cuGetErrorName(CUresult error, const char **pStr);
+extern CUresult cuMemGetAddressRange_v2(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr);
+extern CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev);
+extern CUresult cuCtxDestroy(CUcontext ctx);
+extern CUresult cuCtxGetCurrent(CUcontext *pctx);
+extern CUresult cuCtxSetCurrent(CUcontext ctx);
+extern CUresult cuCtxGetDevice(CUdevice *device);
+extern CUresult cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdeviceptr ptr);
+extern CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ,
+                              unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ,
+                              unsigned int sharedMemBytes, CUstream hStream, void **kernelParams, void **extra);
+extern CUresult cuLaunchKernelEx(const CUlaunchConfig *config, CUfunction f, void **kernelParams, void **extra);
+extern CUresult cuMemAddressReserve(CUdeviceptr *ptr, size_t size, size_t alignment, CUdeviceptr addr, unsigned long long flags);
+extern CUresult cuMemAddressFree(CUdeviceptr ptr, size_t size);
+extern CUresult cuMemCreate(CUmemGenericAllocationHandle *handle, size_t size, const CUmemAllocationProp *prop, unsigned long long flags);
+extern CUresult cuMemGetAllocationGranularity(size_t *granularity, const CUmemAllocationProp *prop, CUmemAllocationGranularity_flags option);
+extern CUresult cuMemExportToShareableHandle(void *shareableHandle, CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType, unsigned long long flags);
+extern CUresult cuMemImportFromShareableHandle(CUmemGenericAllocationHandle *handle, void *osHandle, CUmemAllocationHandleType shHandleType);
+extern CUresult cuMemMap(CUdeviceptr ptr, size_t size, size_t offset, CUmemGenericAllocationHandle handle, unsigned long long flags);
+extern CUresult cuMemRelease(CUmemGenericAllocationHandle handle);
+extern CUresult cuMemRetainAllocationHandle(CUmemGenericAllocationHandle *handle, void *addr);
+extern CUresult cuMemSetAccess(CUdeviceptr ptr, size_t size, const CUmemAccessDesc *desc, size_t count);
+extern CUresult cuMemUnmap(CUdeviceptr ptr, size_t size);
+extern CUresult cuMemGetAllocationPropertiesFromHandle(CUmemAllocationProp *prop, CUmemGenericAllocationHandle handle);
+extern CUresult cuMemGetHandleForAddressRange(void *handle, CUdeviceptr dptr, size_t size, CUmemRangeHandleType handleType, unsigned long long flags);
+extern CUresult cuMulticastAddDevice(CUmemGenericAllocationHandle mcHandle, CUdevice dev);
+extern CUresult cuMulticastBindMem(CUmemGenericAllocationHandle mcHandle, size_t mcOffset, CUmemGenericAllocationHandle memHandle, size_t memOffset, size_t size, unsigned long long flags);
+extern CUresult cuMulticastBindAddr(CUmemGenericAllocationHandle mcHandle, size_t mcOffset, CUdeviceptr memptr, size_t size, unsigned long long flags);
+extern CUresult cuMulticastCreate(CUmemGenericAllocationHandle *mcHandle, const void *prop);
+extern CUresult cuMulticastGetGranularity(size_t *granularity, const void *prop, unsigned int option);
+extern CUresult cuMulticastUnbind(CUmemGenericAllocationHandle mcHandle, CUdevice dev, size_t mcOffset, size_t size);
+
 // Is cuMem API usage enabled
 extern int ncclCuMemEnable();
 extern int ncclCuMemHostEnable();
@@ -25,14 +63,14 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 
 #endif
 
-#define CUPFN(symbol) pfn_##symbol
+#define CUPFN(symbol) symbol
 
-// Check CUDA PFN driver calls
+// Check CUDA driver calls
 #define CUCHECK(cmd) do {				      \
-    CUresult err = pfn_##cmd;				      \
+    CUresult err = cmd;					      \
     if( err != CUDA_SUCCESS ) {				      \
       const char *errStr;				      \
-      (void) pfn_cuGetErrorString(err, &errStr);	      \
+      (void) cuGetErrorString(err, &errStr);		      \
       ERR("Cuda failure %d '%s'", err, errStr);	      \
       ErrorStackTraceUtil::logErrorMessage("Cuda Error: " + std::string(errStr));			      \
       return ncclUnhandledCudaError;			      \
@@ -40,14 +78,14 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 } while(false)
 
 #define CUCALL(cmd) do {				      \
-    pfn_##cmd;				                \
+    cmd;					                \
 } while(false)
 
 #define CUCHECKGOTO(cmd, res, label) do {		      \
-    CUresult err = pfn_##cmd;				      \
+    CUresult err = cmd;					      \
     if( err != CUDA_SUCCESS ) {				      \
       const char *errStr;				      \
-      (void) pfn_cuGetErrorString(err, &errStr);	      \
+      (void) cuGetErrorString(err, &errStr);		      \
       WARN("Cuda failure %d '%s'", err, errStr);	      \
       ErrorStackTraceUtil::logErrorMessage("Cuda Error: " + std::string(errStr));			      \
       res = ncclUnhandledCudaError;			      \
@@ -57,16 +95,16 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
 
 // Report failure but clear error and continue
 #define CUCHECKIGNORE(cmd) do {						\
-    CUresult err = pfn_##cmd;						\
+    CUresult err = cmd;							\
     if( err != CUDA_SUCCESS ) {						\
       const char *errStr;						\
-      (void) pfn_cuGetErrorString(err, &errStr);			\
+      (void) cuGetErrorString(err, &errStr);				\
       INFO(NCCL_ALL,"%s:%d Cuda failure %d '%s'", __FILE__, __LINE__, err, errStr); \
     }									\
 } while(false)
 
 #define CUCHECKTHREAD(cmd, args) do {					\
-    CUresult err = pfn_##cmd;						\
+    CUresult err = cmd;							\
     if (err != CUDA_SUCCESS) {						\
       INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, err); \
       args->ret = ncclUnhandledCudaError;				\
@@ -74,10 +112,12 @@ extern CUmemAllocationHandleType ncclCuMemHandleType;
     }									\
 } while(0)
 
-#define DECLARE_CUDA_PFN_EXTERN(symbol,version) extern PFN_##symbol##_v##version pfn_##symbol
+#define DECLARE_CUDA_PFN_EXTERN(symbol,version) // extern PFN_##symbol##_v##version pfn_##symbol
 
 #if CUDART_VERSION >= 11030
-/* CUDA Driver functions loaded with cuGetProcAddress for versioning */
+// CUDA Driver functions - using external declarations for NEX CPU emulation
+// PFN function pointer declarations are not needed; symbols resolved via nex_cuda.so
+/*
 DECLARE_CUDA_PFN_EXTERN(cuDeviceGet, 2000);
 DECLARE_CUDA_PFN_EXTERN(cuDeviceGetAttribute, 2000);
 DECLARE_CUDA_PFN_EXTERN(cuGetErrorString, 6000);
@@ -110,7 +150,7 @@ DECLARE_CUDA_PFN_EXTERN(cuMemGetAllocationPropertiesFromHandle, 10020);
 DECLARE_CUDA_PFN_EXTERN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
 #endif
 #if CUDA_VERSION >= 12010
-/* NVSwitch Multicast support */
+// NVSwitch Multicast support
 DECLARE_CUDA_PFN_EXTERN(cuMulticastAddDevice, 12010);
 DECLARE_CUDA_PFN_EXTERN(cuMulticastBindMem, 12010);
 DECLARE_CUDA_PFN_EXTERN(cuMulticastBindAddr, 12010);
@@ -118,6 +158,7 @@ DECLARE_CUDA_PFN_EXTERN(cuMulticastCreate, 12010);
 DECLARE_CUDA_PFN_EXTERN(cuMulticastGetGranularity, 12010);
 DECLARE_CUDA_PFN_EXTERN(cuMulticastUnbind, 12010);
 #endif
+*/
 #endif
 
 ncclResult_t ncclCudaLibraryInit(void);
