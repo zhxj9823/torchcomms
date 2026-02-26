@@ -1,6 +1,6 @@
 #include "symmetric.h"
-#include "symmetric/kernel.cuh"
-#include "symmetric/primitives.cuh"
+#include "symmetric/kernel.hh"
+#include "symmetric/primitives.hh"
 
 template<int BytePerPack, int UnrollPacks, int UnrollPeers>
 static __device__ void bcastDeep(
@@ -111,7 +111,7 @@ static __device__ void bcast(
   size_t nBytes = nElts*sizeof(T);
 
   uint32_t nPreBytes = (128u - inputUptr)%128u;
-  nPreBytes = min((size_t)nPreBytes, nBytes);
+  nPreBytes = std::min((size_t)nPreBytes, nBytes);
   uintptr_t cursor = nPreBytes;
 
   constexpr int MinWarpPerBlock = 4;
@@ -162,10 +162,10 @@ __device__ __forceinline__ void ncclSymRun_AllGather_ST(ncclSymDevArgs const* ar
   int const& rank = prim.rank;
 
   // Threads numbered over rank.
-  int bt = flattenIx(threadIdx.x%WARP_SIZE, WARP_SIZE,
+  int bt = flattenIx(threadIdx().x%WARP_SIZE, WARP_SIZE,
                      prim.block, prim.nBlocks,
-                     threadIdx.x/WARP_SIZE, blockDim.x/WARP_SIZE);
-  int btn = prim.nBlocks*blockDim.x;
+                     threadIdx().x/WARP_SIZE, blockDim().x/WARP_SIZE);
+  int btn = prim.nBlocks*blockDim().x;
 
   prim.barrierArrive(ncclCoopCta(), /*release=*/false);
   //prim.barrierWait(ncclCoopCta(), /*acquire=*/false);
@@ -189,7 +189,7 @@ static __device__ void bcastMultimem(
   size_t nBytes = nElts*sizeof(T);
 
   uint32_t nPreBytes = (16-inputUptr)%16;
-  nPreBytes = min((size_t)nPreBytes, nBytes);
+  nPreBytes = std::min((size_t)nPreBytes, nBytes);
   uintptr_t nSufBytes;
 
   if ((inputUptr-outputUptr)%16 == 0) {
@@ -239,10 +239,10 @@ __device__ __forceinline__ void ncclSymRun_AllGather_STMC(ncclSymDevArgs const* 
   char* output = args->output;
   size_t bytes = args->nElts;
   // Round robin memory to blocks.
-  int t = flattenIx(threadIdx.x%WARP_SIZE, WARP_SIZE,
+  int t = flattenIx(threadIdx().x%WARP_SIZE, WARP_SIZE,
                     prim.block, prim.nBlocks,
-                    threadIdx.x/WARP_SIZE, blockDim.x/WARP_SIZE);
-  int tn = prim.nBlocks*blockDim.x;
+                    threadIdx().x/WARP_SIZE, blockDim().x/WARP_SIZE);
+  int tn = prim.nBlocks*blockDim().x;
 
   prim.barrierArrive(ncclCoopCta(), /*release=*/false);
   prim.barrierWait(ncclCoopCta(), /*acquire=*/false);
@@ -264,11 +264,11 @@ static __device__ void allgather_LL_body(
   int rank = prim.rank;
   int nRanks = prim.nRanks;
   constexpr int tn = ncclSymMaxThreads;
-  int t = threadIdx.x;
+  int t = threadIdx().x;
 
   #pragma unroll 1
   while (0 < nElts) {
-    int nIterPacks = min(nPacks, tn);
+    int nIterPacks = std::min(nPacks, tn);
     if (t < nIterPacks) {
       Pack x = loadPack<Pack>(input, t*EltPerPack, nElts);
       prim.bcastLL(/*slot=*/nIterPacks*rank + t, x);
@@ -343,7 +343,7 @@ static __device__ void ncclSymRun_AllGather_LL_impl(ncclSymDevArgs const* args, 
   int blockPackEnd = blockPackBegin + nPackPerBlock + (prim.block < nPackModBlock ? 1 : 0);
   int nBlockPacks = blockPackEnd - blockPackBegin;
   int nBlockElts = nElts - blockPackBegin*BytePerPack;
-  nBlockElts = min(nBlockElts, nBlockPacks*BytePerPack);
+  nBlockElts = std::min(nBlockElts, nBlockPacks*BytePerPack);
   char* blockInput = args->input + blockPackBegin*BytePerPack;
   char* blockOutput = args->output + blockPackBegin*BytePerPack;
 

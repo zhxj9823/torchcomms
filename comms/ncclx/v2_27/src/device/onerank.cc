@@ -15,15 +15,15 @@ namespace {
   __global__ __launch_bounds__(512, 1)
   void oneRankReduce(void* dst, void* src, size_t nElts, uint64_t redOpArg, bool redOpArgIsPtr) {
     using T = typename RedOp::EltType;
-    auto tid = threadIdx.x;
-    auto tn = blockDim.x;
-    auto bid = blockIdx.x;
-    auto bn = gridDim.x;
+    int tid = threadIdx().x;
+    int tn = blockDim().x;
+    int bid = blockIdx().x;
+    int bn = gridDim().x;
 
     // each block/channel gets a roughly equal segment of 16 byte packs
     constexpr int EltPerPack = 16/sizeof(T);
-    intptr_t i0 = (bid+0)*alignUp(divUp(nElts, bn), EltPerPack);
-    intptr_t i1 = (bid+1)*alignUp(divUp(nElts, bn), EltPerPack);
+    intptr_t i0 = (bid+0)*alignUp(nElts/bn, EltPerPack);
+    intptr_t i1 = (bid+1)*alignUp(nElts/bn, EltPerPack);
     i0 = min(i0, nElts);
     i1 = min(i1, nElts);
     src = (T*)src + i0;

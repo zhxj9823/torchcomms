@@ -879,23 +879,20 @@ static int setProxyThreadContext(struct ncclProxyState* proxyState) {
   if (createThreadContext == -1) {
     createThreadContext = NCCL_CREATE_THREAD_CONTEXT;
     if (createThreadContext) {
-      if (CUPFN(cuCtxCreate) == nullptr || CUPFN(cuCtxDestroy) == nullptr || CUPFN(cuCtxSetCurrent) == nullptr) {
-        WARN("Unable to create thread context due to old driver, disabling.");
-        createThreadContext = 0;
-        goto exit;
-      }
+      // Note: Functions are always available with external declarations
+      // No need to check for nullptr
     }
   }
   if (createThreadContext) {
     if (proxyState->cudaCtx == NULL) {
-      if (CUPFN(cuCtxCreate(&proxyState->cudaCtx,
-                            NULL, 0, CU_CTX_SCHED_SPIN|CU_CTX_MAP_HOST, proxyState->cudaDev)) != CUDA_SUCCESS) {
+      if (cuCtxCreate(&proxyState->cudaCtx,
+                     CU_CTX_SCHED_SPIN|CU_CTX_MAP_HOST, proxyState->cudaDev) != CUDA_SUCCESS) {
         WARN("Failed to create CUDA context on device %d", proxyState->cudaDev);
         createThreadContext = 0;
         goto exit;
       }
     } else {
-      if (CUPFN(cuCtxSetCurrent(proxyState->cudaCtx)) != CUDA_SUCCESS) {
+      if (cuCtxSetCurrent(proxyState->cudaCtx) != CUDA_SUCCESS) {
         WARN("Failed to set CUDA context on device %d", proxyState->cudaDev);
         goto exit;
       }
@@ -996,6 +993,7 @@ static ncclResult_t ncclProxyProgressCreate(struct ncclProxyState* proxyState) {
 ncclResult_t ncclProxyProgressDestroy(struct ncclProxyState* proxyState) {
   struct ncclProxyProgressState* state = &proxyState->progressState;
 
+  INFO(NCCL_PROXY, "Destroying proxy progress thread");
   // Request the proxy to stop and then wake it
   if (state->opsPool) {
     pthread_mutex_lock(&state->opsPool->mutex);
@@ -1465,7 +1463,7 @@ static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclP
     TRACE(NCCL_PROXY, "proxyProgressAsync::proxySetup() opId=%p", op->opId);
     res = op->connection->tcomm->proxySetup(op->connection, proxyState, op->reqBuff, op->reqSize, op->respBuff, op->respSize, &done);
   } else if (op->type == ncclProxyMsgConnect) {
-    TRACE(NCCL_PROXY, "proxyProgressAsync::proxyConnect() opId=%p op.reqBuff=%p", op->opId, op->reqBuff);
+    INFO(NCCL_PROXY, "proxyProgressAsync::proxyConnect() opId=%p op.reqBuff=%p", op->opId, op->reqBuff);
     res = op->connection->tcomm->proxyConnect(op->connection, proxyState, op->reqBuff, op->reqSize, op->respBuff, op->respSize, &done);
   } else if (op->type == ncclProxyMsgSharedInit) {
     int nChannels = (int) *op->reqBuff;

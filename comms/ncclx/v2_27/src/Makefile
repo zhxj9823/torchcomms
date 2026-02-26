@@ -15,9 +15,18 @@ include ../makefiles/version.mk
 
 ##### Mock Scuba Data in CMake build
 CXXFLAGS += -DMOCK_SCUBA_DATA -DFOLLY_XLOG_STRIP_PREFIXES=\"${BASE_DIR}\"
+CXXFLAGS += -DGLOG_USE_GLOG_EXPORT
+#CXXFLAGS += -include cuda_compat.hh  # stashed — definitions live in common.h / cuda_emulator.hh
 
 ifeq ($(ENABLE_TCPDM),0)
 CXXFLAGS += -DCTRAN_DISABLE_TCPDM
+endif
+
+##### Mock topology support
+ifeq ($(MOCK_TOPOLOGY), 1)
+  CXXFLAGS += -DNCCL_MOCK_TOPOLOGY
+  LIBSRCFILES += misc/mock_syscalls.cc
+  $(info Building with mock topology support enabled)
 endif
 
 ##### src files
@@ -195,7 +204,7 @@ OBJDIR := $(BUILDDIR)/obj
 PKGDIR := $(BUILDDIR)/lib/pkgconfig
 BINDIR := $(BUILDDIR)/bin
 ##### target files
-CUDARTLIB  ?= cudart_static
+CUDARTLIB  ?= cudart
 
 # Use compatibility shim only with static cudart; see https://github.com/NVIDIA/nccl/issues/658
 ifeq ($(CUDARTLIB), cudart_static)
@@ -216,7 +225,7 @@ LIBOBJ_C        := $(LIBSRCFILES_C:%.c=$(OBJDIR)/%.o)
 LIBOBJ          := $(LIBOBJ_CC) $(LIBOBJ_CPP) $(LIBOBJ_C)
 BINOBJ     := $(BINSRCFILES:%.cc=$(OBJDIR)/%.o)
 DEPFILES   := $(LIBOBJ:%.o=%.d) $(BINOBJ:%.o=%.d)
-LDFLAGS    += -Wl,--no-undefined
+#LDFLAGS    += -Wl,--no-undefined
 LDFLAGS    += -L${CUDA_LIB} -L${BUILDDIR} -L${CONDA_LIB_DIR} -l$(CUDARTLIB) -lpthread -lm -lrt -ldl
 LDFLAGS    += ${THIRD_PARTY_LDFLAGS}
 LDFLAGS    += -Wl,--version-script=version.script

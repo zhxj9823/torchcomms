@@ -23,22 +23,14 @@ template<typename Int>
 constexpr static __host__ __device__ Int minval(Int a) { return a; }
 template<typename Int, typename ...More>
 constexpr static __host__ __device__ Int minval(Int a, Int b, More ...more) {
-  #if __CUDA_ARCH__
-    return minval(min(a, b), more...);
-  #else
     return minval(a < b ? a : b, more...);
-  #endif
 }
 
 template<typename Int>
 constexpr static __host__ __device__ Int maxval(Int a) { return a; }
 template<typename Int, typename ...More>
 constexpr static __host__ __device__ Int maxval(Int a, Int b, More ...more) {
-  #if __CUDA_ARCH__
-    return maxval(max(a, b), more...);
-  #else
     return maxval(a > b ? a : b, more...);
-  #endif
 }
 
 #define DIVUP(x, y) \

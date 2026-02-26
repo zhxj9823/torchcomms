@@ -17,13 +17,15 @@
 // #define ALIGNED_LOAD
 
 inline __device__ void load64gpu(const uint64_t* ptr, uint64_t &v) {
-  #if __CUDA_ARCH__ >= 700
-      asm volatile("ld.relaxed.gpu.u64 {%0}, [%1];"
-      : "=l"(v) : "l"(ptr) : "memory");
-  #else
-      asm volatile("ld.volatile.global.u64 {%0}, [%1];"
-      : "=l"(v) : "l"(ptr) : "memory");
-  #endif
+  v = *ptr;
+  // #if __CUDA_ARCH__ >= 700
+  //     asm volatile("ld.relaxed.gpu.u64 {%0}, [%1];"
+  //     : "=l"(v) : "l"(ptr) : "memory");
+  // #else
+      
+  //     asm volatile("ld.global.u64 {%0}, [%1];"
+  //     : "=l"(v) : "l"(ptr) : "memory");
+  // #endif
 }
 
 #define PAGE_META_SIZE 16
@@ -34,21 +36,21 @@ inline __device__ void load64gpu(const uint64_t* ptr, uint64_t &v) {
 inline __device__ void ncclNetDeviceUnpackSetup(void* ohandle, const int group, const int index) {
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
   // coverity[index_parm:FALSE]
-  ncclShmem.groups[group].devicePlugin.unpack.g_meta[index] = handle->meta;
-  ncclShmem.devicePlugin.unpack.bounce_buf = handle->bounce_buf;
+  ncclShmem->groups[group].devicePlugin.unpack.g_meta[index] = handle->meta;
+  ncclShmem->devicePlugin.unpack.bounce_buf = handle->bounce_buf;
   // coverity[index_parm:FALSE]
-  ncclShmem.groups[group].devicePlugin.unpack.head[index] = handle->head;
+  ncclShmem->groups[group].devicePlugin.unpack.head[index] = handle->head;
 }
 
 inline __device__ void ncclNetDeviceIncrementHead(const int group, const int index) {
   // coverity[index_parm:FALSE]
-  ncclShmem.groups[group].devicePlugin.unpack.head[index]++;
+  ncclShmem->groups[group].devicePlugin.unpack.head[index]++;
 }
 
 inline __device__ void ncclNetDeviceSaveHead(void* ohandle, const int group, const int index) {
   struct unpackNetDeviceHandle* handle = (struct unpackNetDeviceHandle*) ohandle;
   // coverity[index_parm:FALSE]
-  handle->head = ncclShmem.groups[group].devicePlugin.unpack.head[index];
+  handle->head = ncclShmem->groups[group].devicePlugin.unpack.head[index];
 }
 
 template <uint8_t sz>
@@ -176,18 +178,29 @@ inline __device__ void ncclNetDeviceUnpackInner(
     const int tid, const int tidInBlock, const int nworkers, const int group, const int index,
     void *src, const int nbytes, const uint64_t step);
 
+    // 32-bit
+static inline int ffs0_u32(unsigned int x) {
+    return x ? __builtin_ctz(x) : -1;   // GCC/Clang/ICC
+}
+
+// 64-bit
+static inline int ffs0_u64(unsigned long long x) {
+    return x ? __builtin_ctzll(x) : -1;
+}
+
+
 template <>
 inline __device__ void ncclNetDeviceUnpack</*Recv=*/1>(
     const int tid, const int tidInBlock, const int nworkers, const int group, int mask, int Src, int workSize) {
 
   while (mask != 0) {
-    int ix = __ffs(mask)-1; // Get the first set bit of the mask (this should correlate to a peer index)
+    int ix = ffs0_u32(mask)-1; // Get the first set bit of the mask (this should correlate to a peer index)
     mask &= mask-1; // Drop the first set bit of the mask
 
     // Pack data from the internal iovec to the supplied flat srcs buffer using all the threads
     // + Src is necessary in the case of accessing the user buffer directly
     ncclNetDeviceUnpackInner(tid, tidInBlock, nworkers, group /* in case they need to use split warps shared memory partitioning*/,
-      ix, ncclShmem.groups[group].srcs[ix + Src], workSize, ncclShmem.groups[group].devicePlugin.unpack.head[ix]);
+      ix, ncclShmem->groups[group].srcs[ix + Src], workSize, ncclShmem->groups[group].devicePlugin.unpack.head[ix]);
   }
 }
 
@@ -212,8 +225,8 @@ inline __device__ void ncclNetDeviceUnpackInner(
 
   // hack head use per-warp
   head          = step;
-  g_meta_struct = ncclShmem.groups[group].devicePlugin.unpack.g_meta[index];
-  bounce_buf    = ncclShmem.devicePlugin.unpack.bounce_buf;
+  g_meta_struct = ncclShmem->groups[group].devicePlugin.unpack.g_meta[index];
+  bounce_buf    = ncclShmem->devicePlugin.unpack.bounce_buf;
 
   __syncwarp();
 
@@ -224,7 +237,7 @@ inline __device__ void ncclNetDeviceUnpackInner(
   // Currently, even/odd groups perform send/recv separately. We don't really need space for send side.
   // Total size is N page per warp * 16 B per page * 20 WARPS max = 320 * N bytes, N == WARP_SHM_PAGE_CNT
   static_assert(ncclShmemScratchWarpSize() >= WARP_SHM_SIZE, "Each warp must have enough scratch space");
-  s_meta = (loadMeta*) ncclScratchForWarp(tidInBlock / WARP_SIZE); // (loadMeta*) (ncclShmem.devicePlugin.unpack.meta + shm_off);
+  s_meta = (loadMeta*) ncclScratchForWarp(tidInBlock / WARP_SIZE); // (loadMeta*) (ncclShmem->devicePlugin.unpack.meta + shm_off);
 
   load64gpu(g_meta_struct->cnt + head, meta_cnt);
 

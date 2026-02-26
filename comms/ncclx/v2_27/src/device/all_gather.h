@@ -11,11 +11,11 @@
 namespace {
   template<typename T, typename RedOp, typename Proto, bool isNetOffload = false>
   __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWorkColl* work) {
-    ncclRing *ring = &ncclShmem.channel.ring;
+    ncclRing *ring = &ncclShmem->channel.ring;
     const int *ringRanks = ring->userRanks;
-    const int nranks = ncclShmem.comm.nRanks;
+    const int nranks = ncclShmem->comm.nRanks;
     ssize_t count, partOffset, partCount, chunkCount;
-    ncclCollCbdPart(work, ncclShmem.channelId, Proto::Id, sizeof(T), &count, &partOffset, &partCount, &chunkCount);
+    ncclCollCbdPart(work, ncclShmem->channelId, Proto::Id, sizeof(T), &count, &partOffset, &partCount, &chunkCount);
     ssize_t offset;
     ssize_t dataOffset;
     int nelem;
@@ -24,6 +24,7 @@ namespace {
     T *inputBuf = (T*)work->sendbuff;
     T *outputBuf = (T*)work->recvbuff;
 
+    // printf("NCCL_DEVICE: AllGather: sendbuff %p, recvbuff %p, netoffload %d\n", inputBuf, outputBuf, isNetOffload);
     // If isNetOffload == true, we only use 1 warp to drive Ring algo/network communication
     // and the rest of warps proceed to copy src data into dst buffer in parallel when AG
     // is not in-place.
@@ -48,6 +49,7 @@ namespace {
         // step 0: push data to next GPU
         rankDest = ringRanks[0];
         offset = dataOffset + rankDest * count;
+        // printf("NCCL_DEVICE: AllGather: dataOffset %ld, rankDest %d, offset %ld\n", dataOffset, rankDest, offset);
 
         if ((inputBuf + dataOffset == outputBuf + offset) || isNetOffload) { // In place or onePPN
           prims.directSend(dataOffset, offset, nelem);
@@ -113,10 +115,10 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SIMPLE
   __device__ __forceinline__ void run(int tid, int nthreads, struct ncclDevWorkColl* work) {
 #if __CUDA_ARCH__ >= 600
     using Proto = ProtoSimple<1, 1>;
-    const int nranks = ncclShmem.comm.nRanks;
-    const int rank = ncclShmem.comm.rank;
+    const int nranks = ncclShmem->comm.nRanks;
+    const int rank = ncclShmem->comm.rank;
     size_t count, channelOffset, channelCount, chunkCount;
-    ncclCollCbdPart(work, ncclShmem.channelId, Proto::Id, sizeof(T), &count, &channelOffset, &channelCount, &chunkCount);
+    ncclCollCbdPart(work, ncclShmem->channelId, Proto::Id, sizeof(T), &count, &channelOffset, &channelCount, &chunkCount);
 
     static constexpr int nworkers = NCCL_PAT_NWORKERS;
     struct ncclPatShmem* shmem = (struct ncclPatShmem*)ncclScratchForWarp(0);
@@ -187,14 +189,14 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
       static_assert(SlicePerChunk==1, "require: SlicePerChunk==1");
       static_assert(MaxDsts<=1 || MaxSrcs<=1, "require: MaxDsts<=1 || MaxSrcs<=1");
 
-      struct ncclNvls* nvls = &ncclShmem.channel.nvls;
-      int nNodes = ncclShmem.comm.nNodes;
+      struct ncclNvls* nvls = &ncclShmem->channel.nvls;
+      int nNodes = ncclShmem->comm.nNodes;
       int nRails = nvls->nHeads;
-      int part = ncclShmem.channelId - work->channelLo;
+      int part = ncclShmem->channelId - work->channelLo;
       char* inbuf = (char*)work->sendbuff;
       char* outbuf = (char*)work->recvbuff;
       ssize_t countPerRank = work->collnet.count;
-      bool inPlace = (inbuf == outbuf + ncclShmem.comm.rank * countPerRank);
+      bool inPlace = (inbuf == outbuf + ncclShmem->comm.rank * countPerRank);
       ssize_t railAllBeg = min(railGridOffset + part * chunkSize, nNodes * countPerRank);
       ssize_t railAllEnd = min(railAllBeg + chunkSize, nNodes * countPerRank);
       int railAllSize = railAllEnd - railAllBeg;
@@ -216,9 +218,9 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
           ssize_t railOneEnd = railOneBeg + countPerRank;
           ssize_t railOneOffset = (railAllBeg + railAllOffset) - railOneBeg;
           int delta = min(railAllEnd, railOneEnd) - (railAllBeg + railAllOffset);
-          int rank = ncclShmem.comm.collNetDenseToUserRank[node * nRails + rail];
+          int rank = ncclShmem->comm.collNetDenseToUserRank[node * nRails + rail];
           ssize_t userOneBeg = rank * countPerRank + railOneOffset;
-          int outIsDst = (inPlace && rank == ncclShmem.comm.rank) || BcastSendNotRecv || work->regUsed ? 0 : 1;
+          int outIsDst = (inPlace && rank == ncclShmem->comm.rank) || BcastSendNotRecv || work->regUsed ? 0 : 1;
           if (nSrcs != 0 && outIsDst + nDsts != 0) {
             reduceCopy<ncclCollUnroll(), RedOp, T,
               /*MultimemSrcs,MinSrcs,MaxSrcs=*/MultimemSrcs, 1, 1,
@@ -244,7 +246,7 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
   };
 
   __device__ __forceinline__ void run(int tid, int/*nthreads*/, struct ncclDevWorkColl* work) {
-    struct ncclNvls* nvls = &ncclShmem.channel.nvls;
+    struct ncclNvls* nvls = &ncclShmem->channel.nvls;
     int nelem;
 
     const int nThreadsNetSend = work->oneNode ? 0 : (work->netRegUsed ? WARP_SIZE :  6 * WARP_SIZE);
@@ -256,9 +258,9 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
     const int tidEndBcast = tidEndNetSend + nThreadsBcast;
 
     if (work->oneNode) {
-      const ssize_t rank = ncclShmem.comm.rank;
+      const ssize_t rank = ncclShmem->comm.rank;
       size_t count, gridOffset, channelCount, offset, chunkCount;
-      ncclCollCbdPart(work, ncclShmem.channelId, NCCL_PROTO_SIMPLE, sizeof(T), &count, &gridOffset, &channelCount, &chunkCount);
+      ncclCollCbdPart(work, ncclShmem->channelId, NCCL_PROTO_SIMPLE, sizeof(T), &count, &gridOffset, &channelCount, &chunkCount);
       if (!work->regUsed) {
         if (tid < tidEndGather) {
           // Gather
@@ -316,8 +318,8 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
       }
     } else {
       // NVLS + IB SHARP
-      int nNodes = ncclShmem.comm.nNodes;
-      int part = ncclShmem.channelId - work->channelLo;
+      int nNodes = ncclShmem->comm.nNodes;
+      int part = ncclShmem->channelId - work->channelLo;
       ssize_t countPerRank = work->collnet.count;
       const int nChannels = work->channelHi - work->channelLo + 1;
       ssize_t chunkCount = work->collnet.chunkCount;
@@ -369,11 +371,11 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
             for (ssize_t railGridOffset = 0; railGridOffset < nNodes * countPerRank; railGridOffset += nChannels * chunkCount) {
               ssize_t railAllBeg = railGridOffset + part * chunkCount;
               ssize_t railAllEnd = min(railAllBeg + chunkCount, nNodes * countPerRank);
-              ssize_t railOneBeg = ncclShmem.comm.node * countPerRank;
+              ssize_t railOneBeg = ncclShmem->comm.node * countPerRank;
               ssize_t railOneEnd = railOneBeg + countPerRank;
-              ssize_t beg = max(railAllBeg, railOneBeg);
-              ssize_t end = min(railAllEnd, railOneEnd);
-              prims.send(beg - railOneBeg, max(ssize_t(0), end - beg));
+              ssize_t beg = std::max(railAllBeg, railOneBeg);
+              ssize_t end = std::min(railAllEnd, railOneEnd);
+              prims.send(beg - railOneBeg, std::max(ssize_t(0), end - beg));
             }
           } else {
             using Proto = ProtoSimple<1, 1, COLL_UNROLL, 0, 1>;
@@ -410,14 +412,14 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
       static_assert(SlicePerChunk==1, "require: SlicePerChunk==1");
       static_assert(MaxDsts<=1 || MaxSrcs<=1, "require: MaxDsts<=1 || MaxSrcs<=1");
 
-      struct ncclDirect* direct = &ncclShmem.channel.collnetDirect;
-      int nNodes = ncclShmem.comm.nNodes;
+      struct ncclDirect* direct = &ncclShmem->channel.collnetDirect;
+      int nNodes = ncclShmem->comm.nNodes;
       int nRails = direct->nHeads;
-      int part = ncclShmem.channelId - work->channelLo;
+      int part = ncclShmem->channelId - work->channelLo;
       char* inbuf = (char*)work->sendbuff;
       char* outbuf = (char*)work->recvbuff;
       ssize_t countPerRank = work->collnet.count*sizeof(T);
-      bool inPlace = (inbuf == outbuf + ncclShmem.comm.rank*countPerRank);
+      bool inPlace = (inbuf == outbuf + ncclShmem->comm.rank*countPerRank);
 
       ssize_t railAllBeg = min(railGridOffset + part*chunkSize, nNodes*countPerRank);
       ssize_t railAllEnd = min(railAllBeg + chunkSize, nNodes*countPerRank);
@@ -440,9 +442,9 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
           ssize_t railOneEnd = railOneBeg + countPerRank;
           ssize_t railOneOffset = (railAllBeg+railAllOffset) - railOneBeg;
           int delta = min(railAllEnd, railOneEnd) - (railAllBeg+railAllOffset);
-          int rank = ncclShmem.comm.collNetDenseToUserRank[node*nRails + rail];
+          int rank = ncclShmem->comm.collNetDenseToUserRank[node*nRails + rail];
           ssize_t userOneBeg = rank*countPerRank + railOneOffset;
-          int outIsDst = (inPlace && rank == ncclShmem.comm.rank) ? 0 : 1;
+          int outIsDst = (inPlace && rank == ncclShmem->comm.rank) ? 0 : 1;
           if (nSrcs != 0 && outIsDst+nDsts != 0) {
             reduceCopy<ncclCollUnroll(), RedOp, T,
                      /*MultimemSrcs,MinSrcs,MaxSrcs=*/0,1,1,
@@ -470,10 +472,10 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
   };
 
   __device__ __forceinline__ void run(int tid, int/*nthreads*/, struct ncclDevWorkColl* work) {
-    const int part = ncclShmem.channelId - work->channelLo;
+    const int part = ncclShmem->channelId - work->channelLo;
     const int nChannels = work->channelHi - work->channelLo + 1;
-    struct ncclDirect* direct = &ncclShmem.channel.collnetDirect;
-    int const &nNodes = ncclShmem.comm.nNodes;
+    struct ncclDirect* direct = &ncclShmem->channel.collnetDirect;
+    int const &nNodes = ncclShmem->comm.nNodes;
     ssize_t countPerRank = work->collnet.count;
     size_t chunkSize = work->collnet.chunkCount;
     const int hasDn = (direct->down[0] >= 0) ? 1 : 0;
@@ -507,11 +509,11 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
         for (ssize_t railGridOffset = 0; railGridOffset < nNodes * countPerRank; railGridOffset += nChannels * chunkSize) {
           ssize_t railAllBeg = railGridOffset + part * chunkSize;
           ssize_t railAllEnd = min(railAllBeg + chunkSize, nNodes * countPerRank);
-          ssize_t railOneBeg = ncclShmem.comm.node * countPerRank;
+          ssize_t railOneBeg = ncclShmem->comm.node * countPerRank;
           ssize_t railOneEnd = railOneBeg + countPerRank;
-          ssize_t beg = max(railAllBeg, railOneBeg);
-          ssize_t end = min(railAllEnd, railOneEnd);
-          prims.send(beg - railOneBeg, max(ssize_t(0), end - beg));
+          ssize_t beg = std::max(railAllBeg, railOneBeg);
+          ssize_t end = std::min(railAllEnd, railOneEnd);
+          prims.send(beg - railOneBeg, std::max(ssize_t(0), end - beg));
         }
       }
       return;

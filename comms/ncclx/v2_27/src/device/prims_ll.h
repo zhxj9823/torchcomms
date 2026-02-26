@@ -24,7 +24,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
   struct ncclConnInfo* recvConn = NULL;
   volatile uint64_t* recvConnHeadPtr = NULL;
   uint64_t recvConnHead;
-  bool needCleanup = false;
 
   struct ncclConnInfo* sendConn = NULL;
   volatile struct ncclConnFifo* sendConnFifo = NULL;
@@ -55,6 +54,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
   int abort = 0;
 
   inline __device__ void waitSend(int nbytes) {
+
     if (sendConnHeadPtr) {
       int spins = 0;
       while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
@@ -62,6 +62,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
         if (checkAbort(abort, 1, spins)) break;
       }
       if (sendConnFifo) {
+    
+        // LOG(LOG_DEBUG, "waitSend  sendConnFifo ptr (%p) %p; headptr %p, head %d", sendConnFifo, &sendConnFifo[sendConnHead%NCCL_STEPS], sendConnHeadPtr, sendConnHead);
+
         int size = ((sendConnHead & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) ? stepLines*sizeof(union ncclLLFifoLine) : nbytes;
         sendConnFifo[sendConnHead%NCCL_STEPS].size = size;
       }
@@ -87,21 +90,19 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
     sendStep[i]++;
   }
 
-  // [Meta]: Helper function to clear the line once data is consumed
-  inline __device__ void clearRecvLL(size_t offset) {
-    for (int i=0; i < MaxRecv && i < fan.nrecv(); i++) {
-      storeLL(recvPtr(i) + offset, 0, 0);
-    }
-    __threadfence();
-  }
-
-  __device__ uint64_t readLL(int offset, int i) {
+   __device__ uint64_t readLL(int offset, int i) {
     union ncclLLFifoLine* src = recvPtr(i) + offset;
     uint32_t flag = recvFlag(i);
     uint32_t data1, flag1, data2, flag2;
     int spins = 0;
+    uint32_t old_flag1 = 0xffff, old_flag2 = 0xffff;
     do {
-      asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(data1), "=r"(flag1), "=r"(data2), "=r"(flag2) : "l"(&src->i4) : "memory");
+      uint32_t const* p = reinterpret_cast<uint32_t const*>(&src->i4);
+      data1 = p[0]; flag1 = p[1]; data2 = p[2]; flag2 = p[3];
+      if( old_flag1 != flag1 || old_flag2 != flag2 ) {
+        // LOG(LOG_DEBUG, "readLL LLcheck for nFifoLines i(%d), (%p), flag %d/%d (expect %d)", i, p, flag1, flag2, flag);
+        old_flag1 = flag1; old_flag2 = flag2;
+      }
       if (checkAbort(abort, 1, spins)) break;
     } while ((flag1 != flag) || (flag2 != flag));
     uint64_t val64 = data1 + (((uint64_t)data2) << 32);
@@ -109,34 +110,47 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
   }
 
   template<int BeginIx>
-  __device__ void readLLBeginAll(int offset, ncclLLFifoLine(&line)[MaxRecv]) {
-    #pragma unroll
-    for (int i=BeginIx; i < MaxRecv; i++) {
-      // Yes, for some template arguments this code will be unreachable.  That's fine.
-      // coverity[dead_error_line]
+  __device__ void readLLBeginAll(int offset, ncclLLFifoLine (&line)[MaxRecv]) {
+#pragma unroll
+    for (int i = BeginIx; i < MaxRecv; i++) {
       if (i < fan.nrecv()) {
         union ncclLLFifoLine* src = recvPtr(i) + offset;
-        asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(line[i].data1), "=r"(line[i].flag1), "=r"(line[i].data2), "=r"(line[i].flag2) : "l"(&src->i4) : "memory");
+        uint32_t const* p = reinterpret_cast<uint32_t const*>(&src->i4);
+        line[i].data1 = p[0];
+        line[i].flag1 = p[1];
+        line[i].data2 = p[2];
+        line[i].flag2 = p[3];
       }
     }
   }
-  __device__ uint64_t readLLFinish(int offset, ncclLLFifoLine(&line)[MaxRecv], int i) {
+
+  __device__ uint64_t
+  readLLFinish(int offset, ncclLLFifoLine (&line)[MaxRecv], int i) {
     union ncclLLFifoLine* src = recvPtr(i) + offset;
     uint32_t flag = recvFlag(i);
     int spins = 0;
     while (line[i].flag1 != flag || line[i].flag2 != flag) {
-      asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(line[i].data1), "=r"(line[i].flag1), "=r"(line[i].data2), "=r"(line[i].flag2) : "l"(&src->i4) : "memory");
+      uint32_t const* p = reinterpret_cast<uint32_t const*>(&src->i4);
+      line[i].data1 = p[0];
+      line[i].flag1 = p[1];
+      line[i].data2 = p[2];
+      line[i].flag2 = p[3];
       if (checkAbort(abort, 1, spins)) break;
     }
     uint64_t val64 = line[i].data1 + (((uint64_t)line[i].data2) << 32);
     return val64;
   }
 
-  __device__ void storeLL(union ncclLLFifoLine* dst, uint64_t val, uint32_t flag) {
-    asm volatile("st.volatile.global.v4.u32 [%0], {%1,%2,%3,%4};" :: "l"(&dst->i4), "r"((uint32_t)val), "r"(flag), "r"((uint32_t)(val >> 32)), "r"(flag) : "memory");
+  __device__ void storeLL(union ncclLLFifoLine* dst, uint64_t val,
+                          uint32_t flag) {
+    uint32_t* p = reinterpret_cast<uint32_t*>(&dst->i4);
+    p[0] = uint32_t(val);
+    p[1] = flag;
+    p[2] = uint32_t(val >> 32);
+    p[3] = flag;
   }
 
-  static constexpr int EltPerLine = sizeof(uint64_t)/sizeof(T);
+  static constexpr int EltPerLine = sizeof(uint64_t) / sizeof(T);
 
   template<typename U>
   __device__ static U load(U *src) {
@@ -147,15 +161,16 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
       uint64_t u8;
     };
     if(sizeof(U) == 1)
-      asm volatile("ld.volatile.global.b8 %0,[%1];" : "=r"(u4) : "l"(src) : "memory");
+      u4 = *reinterpret_cast<volatile uint8_t*>(src);
     else if(sizeof(U) == 2)
-      asm volatile("ld.volatile.global.b16 %0,[%1];" : "=h"(u2) : "l"(src) : "memory");
+      u2 = *reinterpret_cast<volatile uint16_t*>(src);
     else if(sizeof(U) == 4)
-      asm volatile("ld.volatile.global.b32 %0,[%1];" : "=r"(u4) : "l"(src) : "memory");
+      u4 = *reinterpret_cast<volatile uint32_t*>(src);
     else
-      asm volatile("ld.volatile.global.b64 %0,[%1];" : "=l"(u8) : "l"(src) : "memory");
+      u8 = *reinterpret_cast<volatile uint64_t*>(src);
     return elt;
   }
+
 
   template<typename U>
   __device__ static void store(U *dst, U val) {
@@ -167,14 +182,16 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
     };
     elt = val;
     if(sizeof(U) == 1)
-      asm volatile("st.volatile.global.b8 [%0],%1;" :: "l"(dst), "r"(u4) : "memory");
+      *reinterpret_cast<volatile uint8_t*>(dst) = u4;
     else if(sizeof(U) == 2)
-      asm volatile("st.volatile.global.b16 [%0],%1;" :: "l"(dst), "h"(u2) : "memory");
+      *reinterpret_cast<volatile uint16_t*>(dst) = u2;
     else if(sizeof(U) == 4)
-      asm volatile("st.volatile.global.b32 [%0],%1;" :: "l"(dst), "r"(u4) : "memory");
+      *reinterpret_cast<volatile uint32_t*>(dst) = u4;
     else
-      asm volatile("st.volatile.global.b64 [%0],%1;" :: "l"(dst), "l"(u8) : "memory");
+      *reinterpret_cast<volatile uint64_t*>(dst) = u8;
   }
+
+ 
 
   struct DataLoader {
     int misalign;
@@ -273,10 +290,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
           peerData = readLLFinish(offset, line, i);
           data = applyReduce(redOp, peerData, data);
         }
-        // [Meta]: If needed, clear the line once data is consumed
-        if (needCleanup) {
-          clearRecvLL(offset);
-        }
       }
 
       if (postOp) data = applyPostOp(redOp, data);
@@ -323,10 +336,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
   }
 
   __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
+
+    // LOG(LOG_DEBUG, "loadSendConn tid %d, wid %d, i %d conn %p", tid, wid, i, conn);
     sendBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     sendStep[i] = conn->step;
     if (wid == i) sendConn = conn;
   }
+
   __device__ __forceinline__ void loadSendSync() {
     if (tid < fan.nsend()) {
       sendConnHeadPtr = sendConn->head;
@@ -345,8 +361,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
     ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),
-    stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/sizeof(ncclLLFifoLine)) {
-    auto *channel = &ncclShmem.channel;
+    stepLines(ncclShmem->comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/sizeof(ncclLLFifoLine)) {
+
+    // LOG(LOG_DEBUG, "Primitives LL tid %d, wid %d, nthreads %d", tid, wid, nthreads);
+
+      auto *channel = &ncclShmem->channel;
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
     int nrecv=0, nsend=0;
     // We compare with Fan::MaxRecv here because this->MaxRecv is always at least 1
@@ -369,10 +388,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
     // coverity[var_deref_model:FALSE]
     loadSendSync();
     setDataPtrs(inputBuf, outputBuf);
-    // [Meta]: If buffers are shared between communicators, clear the flag after consumed it for reuse
-    if (ncclShmem.comm.buffsShared) {
-      needCleanup = true;
-    }
   }
 
   __device__ ~Primitives() {

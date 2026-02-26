@@ -32,7 +32,7 @@ struct ProtoSimple {
 
   // Data bytes (no flags etc) in one step of the fifo queue.
   __device__ static int calcBytePerStep() {
-    return ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
+    return ncclShmem->comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS;
   }
   // Granularity of data bytes transferred per thread.
   __device__ static int calcBytePerGrain() {
@@ -47,7 +47,7 @@ struct ProtoLL {
 
   // Data bytes (no flags etc) in one step of the fifo queue.
   __device__ static int calcBytePerStep() {
-    return ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/2; // Half is data
+    return ncclShmem->comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/2; // Half is data
   }
   // Granularity of data bytes transferred per thread.
   __device__ static int calcBytePerGrain() {
@@ -62,7 +62,7 @@ struct ProtoLL128 {
 
   // Data bytes (no flags etc) in one step of the fifo queue.
   __device__ static int calcBytePerStep() {
-    return (ncclShmem.comm.buffSizes[NCCL_PROTO_LL128]/NCCL_STEPS)*NCCL_LL128_DATAELEMS/NCCL_LL128_LINEELEMS;
+    return (ncclShmem->comm.buffSizes[NCCL_PROTO_LL128]/NCCL_STEPS)*NCCL_LL128_DATAELEMS/NCCL_LL128_LINEELEMS;
   }
   // Granularity of data bytes transferred per thread.
   __device__ static int calcBytePerGrain() {
@@ -141,13 +141,17 @@ struct PrimitivesWithoutDirect {
 
 __device__ inline int checkAbort(int &abortCache, const int abortValue, int &spins) {
   if (abortCache & abortValue) return 1;
-  if (++spins < NCCL_SPINS_BEFORE_CHECK_ABORT) return 0;
+  if (++spins < NCCL_SPINS_BEFORE_CHECK_ABORT){
+    coop_thread_yield(spins);
+    return 0;
+  } 
   spins = 0;
-  int abort = *ncclShmem.comm.abortFlag;
+  int abort = *ncclShmem->comm.abortFlag;
   if (abort) {
-    ncclShmem.aborted = abort;
+    ncclShmem->aborted = abort;
     abortCache |= abortValue;
   }
+
   return abort;
 }
 

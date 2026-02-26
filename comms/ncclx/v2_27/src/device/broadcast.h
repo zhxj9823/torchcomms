@@ -11,14 +11,14 @@
 namespace {
   template<typename T, typename RedOp, typename Proto>
   __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWorkColl* work) {
-    ncclRing *ring = &ncclShmem.channel.ring;
+    ncclRing *ring = &ncclShmem->channel.ring;
     const int rank = ring->userRanks[0];
     const int nextRank = ring->userRanks[1];
     const int root = work->root;
     ssize_t chunkCount;
     ssize_t channelCount;
     ssize_t gridOffset;
-    ncclCollCbdPart(work, ncclShmem.channelId, Proto::Id, sizeof(T), (ssize_t*)nullptr, &gridOffset, &channelCount, &chunkCount);
+    ncclCollCbdPart(work, ncclShmem->channelId, Proto::Id, sizeof(T), (ssize_t*)nullptr, &gridOffset, &channelCount, &chunkCount);
     size_t offset;
     int nelem;
     int workNthreads;

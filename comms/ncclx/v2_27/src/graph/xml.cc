@@ -17,6 +17,7 @@
 #include <cpuid.h>
 #endif
 
+#define ENABLE_TRACE
 // Arbitrarily large number for constructing virtual topology string
 #define NCCL_MAX_XML_DEPTH 1024
 
@@ -416,8 +417,14 @@ static ncclResult_t getPciPath(const char* busId, char** path) {
   memcpylower(busPath+sizeof("/sys/class/pci_bus/0000:00/../../")-1, busId, BUSID_SIZE-1);
   *path = realpath(busPath, NULL);
   if (*path == NULL) {
-    WARN("Could not find real path of %s", busPath);
-    return ncclSystemError;
+    // use busPath as a fallback
+    *path = (char*)malloc(strlen(busPath)+1);
+    if (*path == NULL) {
+      WARN("Memory allocation failed for path %s", busPath);
+      return ncclSystemError;
+    }
+    strcpy(*path, busPath);
+    // return ncclSystemError;
   }
   return ncclSuccess;
 }
@@ -469,7 +476,7 @@ ncclResult_t ncclTopoSetAttrFromSys(struct ncclXmlNode* pciNode, const char* pat
   char strValue[MAX_STR_LEN];
   NCCLCHECK(ncclTopoGetStrFromSys(path, fileName, strValue));
   if (strValue[0] != '\0') { NCCLCHECK(xmlSetAttr(pciNode, attrName, strValue)); }
-  TRACE(NCCL_GRAPH, "Read from sys %s/%s -> %s=%s", path, fileName, attrName, strValue);
+  INFO(NCCL_GRAPH, "Read from sys %s/%s -> %s=%s", path, fileName, attrName, strValue);
   return ncclSuccess;
 }
 
@@ -743,8 +750,16 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
 
   int dev = -1;
   NCCLCHECK(xmlGetAttrIndex(gpuNode, "dev", &index));
+  int value = -1;
+  xmlGetAttrInt(gpuNode, "sm", &value); // Ignore error
+  printf("GPU dev sm %d\n", value);
   if (index == -1) {
-    NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&dev));
+    printf("nvml dev %p %d \n", nvmlDev, dev);
+    if(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&dev) != ncclSuccess) {
+      WARN("Failed to get NVML device index");
+      return ncclInternalError;
+    }
+    // NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&dev));
     NCCLCHECK(xmlSetAttrInt(gpuNode, "dev", dev));
   }
   NCCLCHECK(xmlGetAttrInt(gpuNode, "dev", &dev));

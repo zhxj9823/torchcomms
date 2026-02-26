@@ -21,7 +21,7 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
   CUDACHECK(cudaGetDevice(&cudaDev));
   CUCHECK(cuDeviceGet(&currentDev, cudaDev));
   // Ignore error if CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED is not supported
-  (void) CUPFN(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED, currentDev));
+  (void) cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED, currentDev);
   if (!flag) return ncclSuccess;
   // Check that all ranks have initialized the fabric fully
   for (int i = 0; i < comm->nRanks; i++) {
@@ -65,11 +65,11 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
            comm->clique.size);
       return ncclSystemError;
     }
-    err = CUPFN(cuMemExportToShareableHandle(&cuDesc, handle, CU_MEM_HANDLE_TYPE_FABRIC, 0));
+    err = cuMemExportToShareableHandle(&cuDesc, handle, CU_MEM_HANDLE_TYPE_FABRIC, 0);
     if (err != CUDA_SUCCESS ||
-        (err = CUPFN(cuMemImportFromShareableHandle(&handle, &cuDesc, CU_MEM_HANDLE_TYPE_FABRIC))) != CUDA_SUCCESS) {
+        (err = cuMemImportFromShareableHandle(&handle, &cuDesc, CU_MEM_HANDLE_TYPE_FABRIC)) != CUDA_SUCCESS) {
       const char *errStr;
-      (void) pfn_cuGetErrorString(err, &errStr);
+      (void) cuGetErrorString(err, &errStr);
       NCCLCHECK(ncclCuMemFree(ptr));
       // Return an error if this is a MNNVL capable system but it's not working
       WARN("MNNVL (cliqueSize %d) is available but not working on this system. Check the IMEX configuration (nvidia-imex-ctl -N). Set NCCL_MNNVL_ENABLE=0 to ignore this issue.",

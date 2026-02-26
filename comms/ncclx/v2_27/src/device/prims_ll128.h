@@ -28,7 +28,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>:
   struct ncclConnInfo* recvConn = NULL;
   volatile uint64_t* recvConnHeadPtr = NULL;
   uint64_t recvConnHead;
-  bool needCleanup = false;
 
   struct ncclConnInfo* sendConn = NULL;
   volatile struct ncclConnFifo* sendConnFifo = NULL;
@@ -82,19 +81,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>:
 #endif
       *sendConnTailPtr = sendConnTail += 1;
     }
-  }
-
-  // [Meta]: Helper function to clear the flag once data is consumed
-  template <int ELEMS_PER_THREAD>
-  inline __device__ void clearRecvLL128(size_t ll128Offset) {
-    for (int i=0; i < MaxRecv && i < fan.nrecv(); i++) {
-      uint64_t* ptr = recvPtr(i) + ll128Offset;
-      #pragma unroll
-      for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
-        store128(ptr + u * WARP_SIZE, 0, 0);
-      }
-    }
-    __threadfence();
   }
 
   template<int WordPerThread>
@@ -266,10 +252,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>:
           v[u+1] = applyReduce(redOp, vr[u+1], v[u+1]);
         }
       }
-      // [Meta]: If needed, clear the flag once data is consumed
-      if (needCleanup && flagThread) {
-        clearRecvLL128<ELEMS_PER_THREAD>(ll128Offset);
-      }
     }
     /********************** End Recv ************************/
 
@@ -382,10 +364,10 @@ public:
     ):
     redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), warp(tid/WARP_SIZE),
-    warpInBlock(threadIdx.x/WARP_SIZE),
+    warpInBlock(threadIdx().x/WARP_SIZE),
     flagThread((tid%8)==7), group(group),
-    stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_LL128]/NCCL_STEPS/sizeof(uint64_t)) {
-    auto *channel = &ncclShmem.channel;
+    stepSize(ncclShmem->comm.buffSizes[NCCL_PROTO_LL128]/NCCL_STEPS/sizeof(uint64_t)) {
+    auto *channel = &ncclShmem->channel;
     int nrecv=0, nsend=0;
     while (nrecv < MaxRecv && recvPeers[nrecv] >= 0) {
       loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv);
@@ -403,10 +385,6 @@ public:
     // coverity[var_deref_model:FALSE]
     loadSendSync();
     setDataPtrs(inputBuf, outputBuf);
-    // [Meta]: If buffers are shared between communicators, clear the flag after consumed it for reuse
-    if (ncclShmem.comm.buffsShared) {
-      needCleanup = true;
-    }
   }
 
   __device__ ~Primitives() {

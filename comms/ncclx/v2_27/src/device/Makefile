@@ -20,19 +20,23 @@ MANIFEST := $(OBJDIR)/manifest
 DEVGLUE_OBJ  := $(OBJDIR)/device_glue.o
 
 INCFLAGS  = -I. -I.. -I$(BUILDDIR)/include -I../include
-INCFLAGS += -I../../
-
-INCFLAGS  += -I$(BASE_DIR)
+# ncclx-specific: ctran stubs need access to ctran headers and plugin includes
+INCFLAGS += -I../include/plugin -I../../ -I$(BASE_DIR)
 INCFLAGS  += -I$(CONDA_INCLUDE_DIR)
-NVCUFLAGS += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
-CXXFLAGS  += $(INCFLAGS)
+INCFLAGS  += -I$(CUDA_INC) -I$(CUDA_INC)/cccl
+
+# Same as nccl port: compile with g++ instead of nvcc
+# CXXFLAGS  += $(INCFLAGS) -O3 -fsanitize=undefined  -std=c++17 -Wno-unknown-pragmas -fvisibility=hidden -Wno-reorder -Wno-uninitialized -Wno-comment -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-local-typedefs -Wno-int-in-bool-context
+CXXFLAGS  += $(INCFLAGS) -O3 -std=c++17 -Wno-unknown-pragmas -fvisibility=hidden -Wno-reorder -Wno-uninitialized -Wno-comment -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-local-typedefs -Wno-int-in-bool-context
+# ncclx-specific defines (Meta host-code requirements, not CPU-emu)
+CXXFLAGS  += -DGLOG_USE_GLOG_EXPORT -DMOCK_SCUBA_DATA -DCUDART_VERSION=12010
+
 
 NVCUFLAGS_SYM := -ccbin $(CXX) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=128 -Xfatbin -compress-all
 NVCUFLAGS_SYM += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
 
 ifneq ($(ENABLE_TCPDM),1)
-NVCUFLAGS += --compiler-options "-DCTRAN_DISABLE_TCPDM"
-NVCUFLAGS_SYM += --compiler-options "-DCTRAN_DISABLE_TCPDM"
+CXXFLAGS  += -DCTRAN_DISABLE_TCPDM
 endif
 
 SAY = @bash -c 'path="$$2"; [[ "$$(realpath "$$2")" =~ ^$(subst .,\.,$(abspath $(NCCLDIR)))/(.*)$$ ]] && path="$${BASH_REMATCH[1]}"; printf "%-15s %s\n" "$$1" "$$path"' SAY
@@ -56,8 +60,13 @@ endif
 define COMPILE_SYM
 @$(SAY) "Compiling" $2;\
  mkdir -p $(dir $1);\
- $(NVCC) $(NVCUFLAGS_SYM) $3 -dw $2 -o $1
+ $(call COMPILE$(or $3,$(suffix $2)),$1,$2)
 endef
+
+# @$(SAY) "Compiling" $2;\
+#  mkdir -p $(dir $1);\
+#  $(NVCC) $(NVCUFLAGS_SYM) $3 -dw $2 -o $1
+# endef
 
 DEPENDS.cu = $(NVCC) $(NVCUFLAGS) -M -dc $1
 DEPENDS.cc = $(CXX) $(CXXFLAGS) -M -c $1
@@ -80,9 +89,7 @@ $(OBJDIR)/gensrc: generate.py
 	  (bar='!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'; \
 	   printf "\n$${bar}\nERROR: Building NCCL requires a Python 3 installation invokable as 'python3'.\n$${bar}\n\n" 1>&2; \
 	   exit 1)) \
-	&& ./generate.py $@ "$(ONLY_FUNCS)" \
-	&& ${BASE_DIR}/comms/ctran/algos/genctran.py $@/ctran \
-	&& mv $@/ctran/* $@
+	&& ./generate.py $@ "$(ONLY_FUNCS)"
 
 $(OBJDIR)/gensrc/symmetric: $(OBJDIR)/gensrc symmetric/generate.py
 	@mkdir -p $@
@@ -100,29 +107,10 @@ $(OBJDIR)/gensrc/symmetric/rules.mk: $(OBJDIR)/gensrc/symmetric ;
 -include $(OBJDIR)/gensrc/symmetric/rules.mk
 # "gensrc/symmetric/rules.mk" populates $(LIB_OBJS_SYM_GEN)
 
-SRCS = common.cu onerank.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllToAll/AllToAllPImpl.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllGather/AllGatherRing.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllGather/AllGatherRecDbl.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllReduce/AllReduceShm.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllGatherP/DirectImpl.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllGatherP/PipelineImpl.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllGatherP/AllGatherP.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllToAllvDedup/PrepareImpl.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/AllToAllvDedup/ExecImpl.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/Broadcast/Broadcast.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/SendRecv/SendRecv.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/SendRecv/SendRecvStagedCopy.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/SendRecv/SendRecvP2p.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/Barrier.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/Checksum.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/RMA/PutSignal.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/RMA/Get.cu
-SRCS += ${BASE_DIR}/comms/ctran/algos/DevShmState.cu
-SRCS += all_reduce_sparse_block.cu
-
--include $(OBJDIR)/gensrc/ctran_rules.mk
-SRCS += $(CTRAN_GEN_SRCS)
+# ncclx-specific: ctran_cpu_stubs.cc provides linker symbols for ctran kernels
+# that are never called in CPU-emu mode. Ctran .cu porting is future work.
+# all_reduce_sparse_block.cc is the ncclx sparse allreduce (Meta-specific).
+SRCS = common.cc onerank.cc ctran_cpu_stubs.cc all_reduce_sparse_block.cc
 
 LIB_OBJS = $(patsubst %, $(OBJDIR)/%.o, $(SRCS)) $(LIB_OBJS_GEN) $(LIB_OBJS_SYM_GEN)
 
@@ -145,9 +133,11 @@ $(OBJDIR)/genobj/symmetric/%.d: $(OBJDIR)/gensrc/symmetric/%
 	$(call DEPENDS,$@,$<)
 
 $(DEVGLUE_OBJ): $(LIB_OBJS)
-	$(NVCC) $(NVCUFLAGS) -dlink $^ -o $@
+	$(CXX) $(CXXFLAGS) -r $^ -o $@
+#	$(NVCC) $(NVCUFLAGS) -dlink $^ -o $@
 
-$(MANIFEST): $(LIB_OBJS) $(DEVGLUE_OBJ)
+# $(MANIFEST): $(LIB_OBJS) $(DEVGLUE_OBJ)
+$(MANIFEST): $(LIB_OBJS)
 	@echo $^ > $@
 
 -include $(wildcard $(OBJDIR)/*.d)

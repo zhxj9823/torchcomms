@@ -1,0 +1,30 @@
+CXX = g++
+CXXFLAGS = -std=c++17 -g -O2 -I../include -I. -DBOOST_ALL_DYN_LINK
+LDFLAGS = -lboost_fiber -lboost_context -lboost_system -lpthread
+
+# Source files
+SRCS = test_barrier_streams.c cuda_emulator.cc
+OBJS = $(SRCS:.c=.o)
+OBJS := $(OBJS:.cc=.o)
+OBJS += ../common/log.o
+
+TARGET = test_barrier_streams
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CXX) $(OBJS) -o $@ $(LDFLAGS)
+
+%.o: %.c
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+
+test: $(TARGET)
+	./$(TARGET)
+
+.PHONY: all clean test

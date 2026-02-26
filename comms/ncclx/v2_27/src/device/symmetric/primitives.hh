@@ -6,6 +6,7 @@
 #include "collectives.h"
 #include "op128.h"
 #include "reduce_kernel.h"
+#include <cstdint>
 
 #if __CUDA_ARCH__ >= 700
 // __grid_constant__ appears to break cuda-gdb
@@ -56,20 +57,22 @@ static __device__ uint32_t idivRcp32_upto64(int x) {
 namespace {
 struct ncclCoopCta {
   __device__ void sync() { __syncthreads(); }
-  __device__ int self() { return threadIdx.x; }
-  __device__ int count() { return blockDim.x; }
+  __device__ int self() { return threadIdx().x; }
+  __device__ int count() { return blockDim().x; }
 };
 struct ncclCoopWarps {
   int log2_nWarps;
   __device__ void sync() {
-    asm volatile("barrier.sync %0, %1;" :: "r"(1 + (threadIdx.x>>(5+log2_nWarps))), "r"(32<<log2_nWarps) : "memory");
+  // PTX removed: barrier.sync to synchronize subgroups of size (32<<log2_nWarps)
+  // Fallback: synchronize the whole CTA. Host emulator should map __syncthreads() appropriately.
+  __syncthreads();
   }
-  __device__ int self() { return threadIdx.x & ((32<<log2_nWarps)-1); }
+  __device__ int self() { return threadIdx().x & ((32<<log2_nWarps)-1); }
   __device__ int count() { return 32<<log2_nWarps; }
 };
 struct ncclCoopWarp {
   __device__ void sync() { __syncwarp(); }
-  __device__ int self() { return threadIdx.x%32; }
+  __device__ int self() { return threadIdx().x%32; }
   __device__ int count() { return 32; }
 };
 }
@@ -100,12 +103,12 @@ struct ncclSymPrims {
     rank(comm.rank),
     nRanks(comm.nRanks),
     nRanks_rcp32(comm.nRanks_rcp32),
-    block(blockIdx.x),
-    nBlocks(gridDim.x),
+    block(blockIdx().x),
+    nBlocks(gridDim().x),
     nBlocks_rcp32(idivRcp32_upto64(nBlocks)),
-    nBlocks_nWarps_rcp32(imulRcp32(nBlocks, nBlocks_rcp32, blockDim.x/32, idivRcp32_upto64(blockDim.x/32))),
-    nRanks_nBlocks_rcp32(imulRcp32(nRanks, nRanks_rcp32, gridDim.x, nBlocks_rcp32)),
-    nWarpPerRank(idivFast32(nBlocks*blockDim.x/32, nRanks, nRanks_rcp32)),
+    nBlocks_nWarps_rcp32(imulRcp32(nBlocks, nBlocks_rcp32, blockDim().x/32, idivRcp32_upto64(blockDim().x/32))),
+    nRanks_nBlocks_rcp32(imulRcp32(nRanks, nRanks_rcp32, gridDim().x, nBlocks_rcp32)),
+    nWarpPerRank(idivFast32(nBlocks*blockDim().x/32, nRanks, nRanks_rcp32)),
     nWarpPerRank_rcp32(idivRcp32_upto64(nWarpPerRank)),
     base(comm.base),
     offsetMc((flags & ncclSymPrims_UseMultimem) ? (char*)comm.baseMc - (char*)base : 0x0),
@@ -115,13 +118,13 @@ struct ncclSymPrims {
       cudaGridDependencySynchronize();
     #endif
 
-    if ((flags & ncclSymPrims_UseBarrier) && threadIdx.x < nRanks) {
+    if ((flags & ncclSymPrims_UseBarrier) && threadIdx().x < nRanks) {
       barEpoch = (flags & ncclSymPrims_UseMultimem) ? base->barEpochMc[block] : base->barEpochUc[block];
     }
     if (flags & ncclSymPrims_UseLL) llEpoch = base->llEpoch[block] + 2;
   }
   __device__  ~ncclSymPrims() {
-    if (threadIdx.x == 0) {
+    if (threadIdx().x == 0) {
       if (flags & ncclSymPrims_UseBarrier) {
         ((flags & ncclSymPrims_UseMultimem) ? base->barEpochMc : base->barEpochUc)[block] = barEpoch;
       }
@@ -131,7 +134,7 @@ struct ncclSymPrims {
 
   template<typename T>
   __device__ T* peerPtr(int peer, T* selfPtr) {
-    return add4G(selfPtr, (peer-rank)*stride4G);
+    return reinterpret_cast<T*>(add4G((uintptr_t)selfPtr, (peer-rank)*stride4G));
   }
 
   template<typename T>
@@ -148,65 +151,50 @@ struct ncclSymPrims {
       }
     #endif
     if (flags & ncclSymPrims_UseMultimem) {
-    #if __CUDA_ARCH__ >= 900 && CUDART_VERSION >= 12010
+      // PTX removed: multimem.red.{release,relaxed}.sys.add.u32
+      // Emulate with atomic fetch_add on host/emulator.
       if (cta.self() == 0) {
         uint32_t* inbox = &multimemPtr(base)->barInboxMc[block];
         if (release) {
-          asm volatile("multimem.red.release.sys.add.u32 [%0],1;" :: "l"(inbox));
+          __atomic_fetch_add(inbox, 1u, __ATOMIC_RELEASE);
         } else {
-          asm volatile("multimem.red.relaxed.sys.add.u32 [%0],1;" :: "l"(inbox));
+          __atomic_fetch_add(inbox, 1u, __ATOMIC_RELAXED);
         }
       }
-    #endif
     } else {
       int r = cta.self();
       if (r != rank && r < nRanks) {
         uint32_t* inbox = &peerPtr(r, base)->barInboxPerPeer[block*nRanks + rank];
-        #if __CUDA_ARCH__ >= 700
-          if (release) {
-            asm volatile("st.release.sys.u32 [%0],%1;" :: "l"(inbox), "r"(barEpoch+1));
-          } else {
-            asm volatile("st.relaxed.sys.u32 [%0],%1;" :: "l"(inbox), "r"(barEpoch+1));
-          }
-        #else
-          asm volatile("st.volatile.u32 [%0],%1;" :: "l"(inbox), "r"(barEpoch+1));
-        #endif
+        // PTX removed: st.{release,relaxed}.sys.u32 / st.volatile.u32
+        if (release) {
+          __atomic_store_n(inbox, (uint32_t)(barEpoch+1), __ATOMIC_RELEASE);
+        } else {
+          __atomic_store_n(inbox, (uint32_t)(barEpoch+1), __ATOMIC_RELAXED);
+        }
       }
     }
   }
 
   __device__  void barrierWait(ncclCoopCta cta, bool acquire) {
     if (flags & ncclSymPrims_UseMultimem) {
-    #if __CUDA_ARCH__ >= 900
+      // PTX removed: ld.{acquire,relaxed}.sys.u32
       if (cta.self() == 0) {
         uint32_t* inbox = &base->barInboxMc[block];
         while (true) {
-          uint32_t got;
-          if (acquire) {
-            asm volatile("ld.acquire.sys.u32 %0,[%1];" : "=r"(got) : "l"(inbox));
-          } else {
-            asm volatile("ld.relaxed.sys.u32 %0,[%1];" : "=r"(got) : "l"(inbox));
-          }
-          if (got-(barEpoch+nRanks) <= uint32_t(-1)>>1) break;
+          uint32_t got = acquire ? __atomic_load_n(inbox, __ATOMIC_ACQUIRE)
+                                 : __atomic_load_n(inbox, __ATOMIC_RELAXED);
+          if (got-(barEpoch+nRanks) <= (uint32_t(-1)>>1)) break;
         }
         barEpoch += nRanks;
       }
-    #endif
     } else {
       int r = cta.self();
       if (r != rank && r < nRanks) {
         uint32_t* inbox = &base->barInboxPerPeer[block*nRanks + r];
         while (true) {
-          uint32_t got;
-          #if __CUDA_ARCH__ >= 700
-            if (acquire) {
-              asm volatile("ld.acquire.sys.u32 %0,[%1];" : "=r"(got) : "l"(inbox));
-            } else {
-              asm volatile("ld.relaxed.sys.u32 %0,[%1];" : "=r"(got) : "l"(inbox));
-            }
-          #else
-            asm volatile("ld.volatile.u32 %0,[%1];" : "=r"(got) : "l"(inbox));
-          #endif
+          // PTX removed: ld.{acquire,relaxed}.sys.u32 / ld.volatile.u32
+          uint32_t got = acquire ? __atomic_load_n(inbox, __ATOMIC_ACQUIRE)
+                                 : __atomic_load_n(inbox, __ATOMIC_RELAXED);
           if (got-(barEpoch+1) <= uint32_t(-1)>>1) break;
         }
       }
@@ -242,7 +230,13 @@ struct ncclSymPrims {
     uint4* buf = ncclSymDevBase_getLLBuf(peerPtr(peer, base), nRanks, block, llEpoch) + slot;
     #pragma unroll
     for (int u=0; u < divUp(sizeof(T),8); u++) {
-      asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" :: "l"(buf + ncclSymLLMaxSlots(sizeof(T))*u), "r"(u32[u][0]), "r"(u32[u][1]), "r"(llEpoch));
+      // PTX removed: st.volatile.v4.u32 of payload and epoch tags
+      // Order: write payload (x,z) then publish tags (y,w) with release semantics.
+      uint4* dst = buf + ncclSymLLMaxSlots(sizeof(T))*u;
+      __atomic_store_n(&dst->x, u32[u][0], __ATOMIC_RELAXED);
+      __atomic_store_n(&dst->z, u32[u][1], __ATOMIC_RELAXED);
+      __atomic_store_n(&dst->y, (uint32_t)llEpoch, __ATOMIC_RELEASE);
+      __atomic_store_n(&dst->w, (uint32_t)llEpoch, __ATOMIC_RELEASE);
     }
   }
 
@@ -254,7 +248,12 @@ struct ncclSymPrims {
       uint4* bufmc = ncclSymDevBase_getLLBuf(multimemPtr(base), nRanks, block, llEpoch) + slot;
       #pragma unroll
       for (int u=0; u < divUp(sizeof(T),8); u++) {
-        asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" :: "l"(bufmc + ncclSymLLMaxSlots(sizeof(T))*u), "r"(u32[u][0]), "r"(u32[u][1]), "r"(llEpoch));
+        // PTX removed: st.volatile.v4.u32 (multimem)
+        uint4* dst = bufmc + ncclSymLLMaxSlots(sizeof(T))*u;
+        __atomic_store_n(&dst->x, u32[u][0], __ATOMIC_RELAXED);
+        __atomic_store_n(&dst->z, u32[u][1], __ATOMIC_RELAXED);
+        __atomic_store_n(&dst->y, (uint32_t)llEpoch, __ATOMIC_RELEASE);
+        __atomic_store_n(&dst->w, (uint32_t)llEpoch, __ATOMIC_RELEASE);
       }
     } else {
       union { T tmp; uint32_t u32[divUp(sizeof(T),8)][2]; };
@@ -269,7 +268,12 @@ struct ncclSymPrims {
           uint4* buf = add4G(buf0, r*stride4G);
           #pragma unroll
           for (int u=0; u < divUp(sizeof(T),8); u++) {
-            asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" :: "l"(buf + ncclSymLLMaxSlots(sizeof(T))*u), "r"(u32[u][0]), "r"(u32[u][1]), "r"(llEpoch));
+            // PTX removed: st.volatile.v4.u32
+            uint4* dst = buf + ncclSymLLMaxSlots(sizeof(T))*u;
+            __atomic_store_n(&dst->x, u32[u][0], __ATOMIC_RELAXED);
+            __atomic_store_n(&dst->z, u32[u][1], __ATOMIC_RELAXED);
+            __atomic_store_n(&dst->y, (uint32_t)llEpoch, __ATOMIC_RELEASE);
+            __atomic_store_n(&dst->w, (uint32_t)llEpoch, __ATOMIC_RELEASE);
           }
           r += 1;
           if (r == nRanks) r = 0;
@@ -281,7 +285,12 @@ struct ncclSymPrims {
         uint4* buf = add4G(buf0, r*stride4G);
         #pragma unroll
         for (int u=0; u < divUp(sizeof(T),8); u++) {
-          asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" :: "l"(buf + ncclSymLLMaxSlots(sizeof(T))*u), "r"(u32[u][0]), "r"(u32[u][1]), "r"(llEpoch));
+          // PTX removed: st.volatile.v4.u32
+          uint4* dst = buf + ncclSymLLMaxSlots(sizeof(T))*u;
+          __atomic_store_n(&dst->x, u32[u][0], __ATOMIC_RELAXED);
+          __atomic_store_n(&dst->z, u32[u][1], __ATOMIC_RELAXED);
+          __atomic_store_n(&dst->y, (uint32_t)llEpoch, __ATOMIC_RELEASE);
+          __atomic_store_n(&dst->w, (uint32_t)llEpoch, __ATOMIC_RELEASE);
         }
         r += 1;
         if (r == nRanks) r = 0;
@@ -300,7 +309,12 @@ struct ncclSymPrims {
         if (u < nSlotsMin || u < nSlots) {
           #pragma unroll
           for (int v=0; v < divUp(sizeof(T),8); v++) {
-            asm volatile("ld.volatile.v4.u32 {%0,%1,%2,%3},[%4];" : "=r"(tmp[u][v].x), "=r"(tmp[u][v].y), "=r"(tmp[u][v].z), "=r"(tmp[u][v].w) : "l"(buf + u*stride + v*ncclSymLLMaxSlots(sizeof(T))));
+            // PTX removed: ld.volatile.v4.u32
+            uint4* src = buf + u*stride + v*ncclSymLLMaxSlots(sizeof(T));
+            tmp[u][v].x = __atomic_load_n(&src->x, __ATOMIC_RELAXED);
+            tmp[u][v].y = __atomic_load_n(&src->y, __ATOMIC_RELAXED);
+            tmp[u][v].z = __atomic_load_n(&src->z, __ATOMIC_RELAXED);
+            tmp[u][v].w = __atomic_load_n(&src->w, __ATOMIC_RELAXED);
           }
         }
       }
@@ -380,7 +394,12 @@ struct ncclSymPrims {
       while (true) {
         #pragma unroll
         for (int u=0; u < divUp(sizeof(T), 8); u++) {
-          asm volatile("ld.volatile.v4.u32 {%0,%1,%2,%3},[%4];" : "=r"(got[u].x), "=r"(got[u].y), "=r"(got[u].z), "=r"(got[u].w) : "l"(buf + u*ncclSymLLMaxSlots(sizeof(T))));
+          // PTX removed: ld.volatile.v4.u32
+          uint4* src = buf + u*ncclSymLLMaxSlots(sizeof(T));
+          got[u].x = __atomic_load_n(&src->x, __ATOMIC_RELAXED);
+          got[u].y = __atomic_load_n(&src->y, __ATOMIC_RELAXED);
+          got[u].z = __atomic_load_n(&src->z, __ATOMIC_RELAXED);
+          got[u].w = __atomic_load_n(&src->w, __ATOMIC_RELAXED);
         }
         bool ok = true;
         #pragma unroll

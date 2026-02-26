@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-
-# pyre-unsafe
 import os
 import sys
 
@@ -110,22 +108,22 @@ def required_cuda(k):
       if k.algo in ldmc_algos:
         cudart = 12070
         arch = None
-        specific_sms = ["100a", "101a", "100f", "101f", "120a", "121a"]
+        specific_sms = [100, 120]
   return (cudart, arch, specific_sms)
 
 ################################################################################
 
 def kernel_fdep(k):
-  return coll_to_lower[k.coll] + '.cu'
+  return coll_to_lower[k.coll] + '.cc'
 
 def kernel_fname(k):
   if k.coll in reductions:
     if k.algo in ldmc_algos and k.ty.startswith('f8'):
-      return paste('_', coll_to_lower[k.coll], k.red, k.ty, k.algo) + '.cu'
+      return paste('_', coll_to_lower[k.coll], k.red, k.ty, k.algo) + '.cc'
     else:
-      return paste('_', coll_to_lower[k.coll], k.red, k.ty) + '.cu'
+      return paste('_', coll_to_lower[k.coll], k.red, k.ty) + '.cc'
   else:
-    return coll_to_lower[k.coll] + '.cu'
+    return coll_to_lower[k.coll] + '.cc'
 
 def kernel_gencode(k):
   if k.coll in reductions and k.algo in ldmc_algos and k.ty.startswith('f8'):
@@ -147,7 +145,7 @@ def kernel_conds(k):
   if not specific_sms:
     arch_cond = "__CUDA_ARCH__ >= %d"%arch
   else:
-    arch_cond = " || ".join(["0"] + ["NCCL_CUDA_ARCH_%sSPECIFIC==%d"%("FAMILY_" if sm[-1] == "f" else "", 10*int(sm.replace('a', '').replace('f', ''))) for sm in specific_sms])
+    arch_cond = " || ".join(["0"] + ["NCCL_CUDA_ARCH_SPECIFIC==%d"%(10*sm) for sm in specific_sms])
   return cudart_cond, arch_cond
 
 def instantiate(k):
@@ -219,9 +217,9 @@ def partition(vals, keyfn):
 
 kernels_by_file = partition(enumerate_kernels(), lambda k: (kernel_fname(k), k.coll))
 
-# Add dependency only files (e.g. allreduce.cu)
+# Add dependency only files (e.g. allreduce.cc)
 for coll in set(k.coll for k in enumerate_kernels()):
-  fname = coll_to_lower[coll]+'.cu'
+  fname = coll_to_lower[coll]+'.cc'
   if (fname, coll) not in kernels_by_file:
     kernels_by_file[fname, coll] = []
 
@@ -229,8 +227,8 @@ for coll in set(k.coll for k in enumerate_kernels()):
 for (fname, coll), ks in kernels_by_file.items():
   with open(os.path.join(gensrc, fname), "w") as f:
     emitln(f, '#include "symmetric.h"')
-    emitln(f, '#include "symmetric/kernel.cuh"')
-    emitln(f, '#include "symmetric/{coll}.cuh"'.format(coll=coll_to_lower[coll]))
+    emitln(f, '#include "symmetric/kernel.hh"')
+    emitln(f, '#include "symmetric/{coll}.hh"'.format(coll=coll_to_lower[coll]))
     for k in ks:
       emitln(f, instantiate(k))
 
@@ -289,8 +287,8 @@ with open(os.path.join(gensrc, "rules.mk"), "w") as f:
   inst_names = sorted(set((k.coll, kernel_fname(k), kernel_gencode(k)) for k in enumerate_kernels()))
   for coll, name, gencode in inst_names:
     f.write(
-      "$(OBJDIR)/genobj/symmetric/{name}.o: $(OBJDIR)/gensrc/symmetric $(OBJDIR)/genobj/symmetric/{coll}.cu.d\n"
-      "\t" "$(call COMPILE_SYM,$@,$(OBJDIR)/gensrc/symmetric/{name},{gencode})\n"
+      "$(OBJDIR)/genobj/symmetric/{name}.o: $(OBJDIR)/gensrc/symmetric $(OBJDIR)/genobj/symmetric/{coll}.cc.d\n"
+      "\t" "$(call COMPILE,$@,$(OBJDIR)/gensrc/symmetric/{name})\n"
       "\n"
-      .format(name=name, coll=coll_to_lower[coll], gencode=gencode)
+      .format(name=name, coll=coll_to_lower[coll])
     )

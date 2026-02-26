@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-
-# pyre-unsafe
 import os
 import sys
 
@@ -199,8 +197,8 @@ kernel_funcs = sorted(set(best_kernel(*fn) for fn in primary_funcs))
 
 ################################################################################
 
-# Generate <gensrc>/device_table.cu
-with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
+# Generate <gensrc>/device_table.cc
+with open(os.path.join(gensrc, "device_table.cc"), "w") as f:
   out = f.write
   out('#include "common.h"\n')
   out("\n")
@@ -303,13 +301,13 @@ with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
     index += 1
   out("0};\n")
 
-# Maps to .cu filename which implements this func. The only constraint is that
+# Maps to .cc filename which implements this func. The only constraint is that
 # "coll" is reflected in the name: formally that no two funcs having different
 # coll's map to the same filename.
 def impl_filename(coll, redop, ty, algo, proto):
-  return "%s.cu" % paste("_", coll_camel_to_lower[coll], redop and redop.lower(), ty)
+  return "%s.cc" % paste("_", coll_camel_to_lower[coll], redop and redop.lower(), ty)
 
-# Partition the functions and kernels to the .cu filenames. The partition is
+# Partition the functions and kernels to the .cc filenames. The partition is
 # a dictionary mapping filename to (coll, func-tuple list)
 def partition_by_name(fns):
   ans = {}
@@ -328,23 +326,23 @@ name_to_kernels = partition_by_name(kfn for kfn in kernel_funcs if kfn[0]!="Gene
 with open(os.path.join(gensrc, "rules.mk"), "w") as f:
   out = f.write
   impl_names = sorted(name_to_funcs.keys())
-  names = impl_names + ["host_table.cc", "device_table.cu"]
+  names = impl_names + ["host_table.cc", "device_table.cc"]
   out("LIB_OBJS_GEN = $(patsubst %,$(OBJDIR)/genobj/%.o,{names})\n"
       .format(names=" ".join(names)))
   out("\n")
 
-  # For each <coll>_<op>_<ty>.cu compile to a .cu.o file. Notice the dependencies
-  # come from the suffix-erased file (e.g. 'gensrc/all_reduce.cu')
+  # For each <coll>_<op>_<ty>.cc compile to a .cc.o file. Notice the dependencies
+  # come from the suffix-erased file (e.g. 'gensrc/all_reduce.cc')
   for name in impl_names:
     coll = name_to_funcs[name][0]
     out(
-      "$(OBJDIR)/genobj/{name}.o: $(OBJDIR)/gensrc $(OBJDIR)/genobj/{lower_coll}.cu.d\n"
+      "$(OBJDIR)/genobj/{name}.o: $(OBJDIR)/gensrc $(OBJDIR)/genobj/{lower_coll}.cc.d\n"
       "\t" "$(call COMPILE,$@,$(OBJDIR)/gensrc/{name})\n"
       "\n"
       .format(name=name, lower_coll=coll_camel_to_lower[coll])
     )
 
-# Add the suffix-erased .cu's which are used only for dependency scraping.
+# Add the suffix-erased .cc's which are used only for dependency scraping.
 for coll in set(coll for (coll,_,_,_,_) in primary_funcs if coll!="Nop"):
   name = impl_filename(coll, None, None, None, None)
   if name not in name_to_funcs:
@@ -375,7 +373,7 @@ ty_to_cxx = {
   "f8e5m2": "__nv_fp8_e5m2"
 }
 
-# Generate each <gensrc>/<impl>.cu:
+# Generate each <gensrc>/<impl>.cc:
 for name in name_to_funcs.keys():
   (coll, fns) = name_to_funcs[name]
   with open(os.path.join(gensrc, name), "w") as f:

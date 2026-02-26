@@ -1,25 +1,27 @@
 // Copyright (c) Meta Platforms, Inc. and affiliates.
+// CPU-ported version — compiled with g++ instead of nvcc
 
+#include "cuda_emulator.hh"
 #include "all_reduce_sparse_block.cuh"
 
 template <typename T>
-__global__ void ncclKernel_AllReduceSparseBlock_Unpack(
+void ncclKernel_AllReduceSparseBlock_Unpack(
     T* unpackBuf,
     const T* packBuf,
     const size_t blockCount,
     const int64_t* unpackIndices,
     const size_t blockLength) {
-  size_t globalId = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t globalId = blockIdx().x * blockDim().x + threadIdx().x;
   for (size_t packOffset = globalId; packOffset < blockCount * blockLength;
-       packOffset += blockDim.x * gridDim.x) {
-    size_t blockIdx = packOffset / blockLength;
-    size_t unpackOffset = unpackIndices[blockIdx] + packOffset % blockLength;
+       packOffset += blockDim().x * gridDim().x) {
+    size_t blkIdx = packOffset / blockLength;
+    size_t unpackOffset = unpackIndices[blkIdx] + packOffset % blockLength;
     unpackBuf[unpackOffset] = packBuf[packOffset];
   }
 }
 
 #define DECL_UNPACK_KERN(T)                                           \
-  template __global__ void ncclKernel_AllReduceSparseBlock_Unpack<T>( \
+  template  void ncclKernel_AllReduceSparseBlock_Unpack<T>( \
       T * unpackBuf,                                                  \
       const T* packBuf,                                               \
       const size_t blockCount,                                        \

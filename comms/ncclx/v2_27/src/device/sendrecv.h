@@ -15,9 +15,15 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
   template<typename Proto>
   __device__ void runSend(int tid, int tn, int group, struct ncclDevWorkP2p* work) {
     size_t bytes = work->sendBytes;
-    bool useLargeChunk = (work->sendIpcReg && ncclShmem.comm.isAllNvlink) || work->sendNetReg;
+    bool useLargeChunk = (work->sendIpcReg && ncclShmem->comm.isAllNvlink) || work->sendNetReg;
     int chunkSize = useLargeChunk ? NCCL_MAX_NET_SIZE : u32fp8Decode(work->sendChunkSize_u32fp8);
-    int stepSize = useLargeChunk ? NCCL_MAX_NET_SIZE : ncclShmem.comm.p2pChunkSize;
+    int stepSize = useLargeChunk ? NCCL_MAX_NET_SIZE : ncclShmem->comm.p2pChunkSize;
+    // LOG(LOG_DEBUG, "runSend P2p send bytes %zu chunkSize %d stepSize %d", bytes, chunkSize, stepSize);
+    // if (tid == 0 && blockIdx().x == 0 && blockIdx().y == 0 && blockIdx().z == 0) {
+      // printf("runSend channel %d work %p sendAddr %p bytes %zu chunkSize %d stepSize %d protoLL %d netReg %d ipcReg %d\n",
+      //        ncclShmem->channelId, work, work->sendAddr, bytes, chunkSize, stepSize,
+      //        work->sendProtoLL, work->sendNetReg, work->sendIpcReg);
+    // }
     Primitives<T, RedOp, FanAsymmetric<0, 1>, 1, Proto, 1>
       prims(tid, tn, nullptr, &work->sendRank, work->sendAddr, nullptr,
             /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, work, stepSize);
@@ -32,9 +38,17 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
   template<typename Proto>
   __device__ void runRecv(int tid, int tn, int group, struct ncclDevWorkP2p* work) {
     size_t bytes = work->recvBytes;
-    bool useLargeChunk = (work->recvIpcReg && ncclShmem.comm.isAllNvlink) || work->recvNetReg;
+    bool useLargeChunk = (work->recvIpcReg && ncclShmem->comm.isAllNvlink) || work->recvNetReg;
     int chunkSize = useLargeChunk ? NCCL_MAX_NET_SIZE : u32fp8Decode(work->recvChunkSize_u32fp8);
-    int stepSize = useLargeChunk ? NCCL_MAX_NET_SIZE : ncclShmem.comm.p2pChunkSize;
+    int stepSize = useLargeChunk ? NCCL_MAX_NET_SIZE : ncclShmem->comm.p2pChunkSize;
+    // LOG(LOG_DEBUG, "runRecv P2p recv bytes %zu chunkSize %d stepSize %d", bytes, chunkSize, stepSize);
+
+    // if (tid == 0 && blockIdx().x == 0 && blockIdx().y == 0 && blockIdx().z == 0) {
+    //   printf("runRecv channel %d work %p recvAddr %p bytes %zu chunkSize %d stepSize %d protoLL %d netReg %d ipcReg %d\n",
+    //          ncclShmem->channelId, work, work->recvAddr, bytes, chunkSize, stepSize,
+    //          work->recvProtoLL, work->recvNetReg, work->recvIpcReg);
+    // }
+    
     Primitives<T, RedOp, FanAsymmetric<1, 0>, 1, Proto, 1>
       prims(tid, tn, &work->recvRank, nullptr, nullptr, work->recvAddr,
             /*redOpArg(ignored)=*/0, group, 1, 1, nullptr, work, stepSize);
@@ -47,8 +61,10 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
   }
 
   __device__ __forceinline__ void run() {
-    const auto tid = threadIdx.x;
-    const auto tn = blockDim.x;
+
+    
+    const int tid = threadIdx().x;
+    const int tn = blockDim().x;
     const int wid = tid/WARP_SIZE;
     const int nWarps = tn/WARP_SIZE;
     const int lane = tid%WARP_SIZE;
@@ -59,8 +75,10 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
     };
     Shared* shared = (Shared*)ncclScratchForWarp(0);
 
-    struct ncclDevWorkP2p* works = (ncclDevWorkP2p*)ncclShmem.workStorage;
-    int nWorks = ncclShmem.nWorks;
+    struct ncclDevWorkP2p* works = (ncclDevWorkP2p*)ncclShmem->workStorage;
+    int nWorks = ncclShmem->nWorks;
+
+    // LOG(LOG_DEBUG, "RunWorkBatch sendrecv P2p nWorks %d, nWarps %d", nWorks, nWarps);
 
     if (wid == 0) {
       // Modify the memory range of each work[] to reflect this channel's
@@ -73,8 +91,9 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
         struct ncclDevWorkP2p* work = &works[workIx];
         size_t bytes = isSend ? work->sendBytes : work->recvBytes;
         int nParts = isSend ? work->nSendChannels : work->nRecvChannels;
-        int part = ncclP2pChannelToPart(work->nP2pChannels, work->channelBase, ncclShmem.channelId);
+        int part = ncclP2pChannelToPart(work->nP2pChannels, work->channelBase, ncclShmem->channelId);
         hasWork = (part < nParts);
+        // LOG(LOG_DEBUG, "RunWorkBatch sendrecv P2p workIx %d hasWork %d", workIx, hasWork);
         if (nParts != 0) {
           size_t partBeg, partEnd;
           ncclP2pPartBounds(nParts, part, bytes, &partBeg, &partEnd);
@@ -101,7 +120,13 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
     //   __float2int_rd(__fdividef(float(x),float(y))).
 
     // nWarpPerWork = nWarps/nWorks
-    int nWarpPerWork = __popc(__ballot_sync(~0u, nWorks*(lane+1) <= nWarps));
+    __syncwarp();
+
+    uint32_t result2 = __ballot_sync(~0u, nWorks*(lane+1) <= nWarps);
+    int nWarpPerWork = __popc(result2);
+    // LOG(LOG_DEBUG, "wid (%d) ballot_sync debug, lane (%d), nWorks %d, nWarps %d, results 0x%x, nWarpPerWork %d", \
+        wid, lane, nWorks, nWarps, result2, nWarpPerWork);
+
     int nRecvWarpPerWork = nWarpPerWork<=4 ? nWarpPerWork/2 : (nWarpPerWork-1)/2;
     int nSendWarpPerWork = nWarpPerWork<=4 ? nRecvWarpPerWork : nRecvWarpPerWork+1;
     // This might reduce nWarpPerWork which is probably desirable. It is better
@@ -109,7 +134,11 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
     // leaves warps unused.
     nWarpPerWork = nSendWarpPerWork + nRecvWarpPerWork;
     // The work index this warp belongs to: workIx = wid/nWarpPerWork
-    int workIx = __popc(__ballot_sync(~0u, (lane+1)*nWarpPerWork <= wid));
+
+    uint32_t ballot_result = __ballot_sync(~0u, (nWarpPerWork*(lane+1)) <= wid);
+    // LOG(LOG_DEBUG, "wid (%d) ballot_sync debug, lane (%d), nWarpPerWork %d, results 0x%x", \
+          wid, lane, nWarpPerWork, ballot_result);
+    int workIx = __popc(ballot_result);
 
     __syncthreads(); // Wait for works[] and shared->* to be updated by warp=0
 
@@ -117,11 +146,18 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
     uint32_t workRecvMask = shared->workRecvMask;
 
     __syncthreads(); // release scratch space used by shared->*
-    if (nWorks <= workIx) return;
-
+    // LOG(LOG_DEBUG, "RunWorkBatch sendrecv P2p tid %d wid %d lane %d workIx %d (nworks %d) nWarpPerWork %d nSendWarpPerWork %d nRecvWarpPerWork %d", \
+        tid, wid, lane, workIx, nWorks, nWarpPerWork, nSendWarpPerWork, nRecvWarpPerWork);
+    if (nWorks <= workIx){
+      return;
+    } 
+    
     // Thread range for whole work (send & recv combined)
     int subtid = tid - workIx*nWarpPerWork*WARP_SIZE;
     int subtn = nWarpPerWork*WARP_SIZE;
+
+    // LOG(LOG_DEBUG, "RunWorkBatch sendrecv P2p workIx %d nWarpPerWork %d nSendWarpPerWork %d nRecvWarpPerWork %d subtn %d", \
+        workIx, nWarpPerWork, nSendWarpPerWork, nRecvWarpPerWork, subtn);
 
     // A send primtive of sufficient size requires 2 cuda barrier ids.
     constexpr int nSendWarpsForExtraGroup = NCCL_SIMPLE_EXTRA_GROUP_IF_NTHREADS_GE/WARP_SIZE;
@@ -139,7 +175,7 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
     struct ncclDevWorkP2p* work = &works[workIx];
     bool hasSend = 1 & (workSendMask>>workIx);
     bool hasRecv = 1 & (workRecvMask>>workIx);
-    bool isCopy = work->sendRank == ncclShmem.comm.rank;
+    bool isCopy = work->sendRank == ncclShmem->comm.rank;
     bool isSend = !hasRecv || (hasSend && subtid < nSendWarpPerWork*WARP_SIZE);
 
     if (!isCopy && hasSend && hasRecv) {

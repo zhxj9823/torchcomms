@@ -61,7 +61,7 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
         if (sharedMemSize > (maxSharedMem-attr.sharedSizeBytes)) {
           WARN("cudaArch %d ncclMaxSharedMem %d exceeds device/fn maxSharedMem %zu",
                cudaArch, sharedMemSize, maxSharedMem-attr.sharedSizeBytes);
-          return ncclSystemError;
+          //return ncclSystemError;
         }
         CUDACHECKGOTO(cudaFuncSetAttribute(fn,
           cudaFuncAttributeMaxDynamicSharedMemorySize, sharedMemSize),
@@ -1235,6 +1235,9 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
     break;
   case ncclDevWorkStorageTypePersistent:
     { ncclResult_t result = ncclSuccess;
+      fprintf(stderr, "DONT SUPPORT: NCCL INFO Uploading %ld bytes of persistent work buffer\n", (long)workBytes);
+      fflush(stderr);
+      exit(1);
       struct uploadWork_cleanup_t* cleanup = nullptr;
       cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
       void* fifoBufDev = nullptr;
@@ -1597,7 +1600,8 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   NCCLCHECKGOTO(ncclCudaDriverVersion(&driverVersion), ret, do_return);
 
   CUfunction fn;
-  CUDACHECKGOTO(cudaGetFuncBySymbol(&fn, sym), ret, do_return);
+  fn = (CUfunction)sym;
+  //CUDACHECKGOTO(cudaGetFuncBySymbol(&fn, sym), ret, do_return);
 
   if (CUDART_VERSION >= 11080 && driverVersion >= 11080) {
   #if CUDART_VERSION >= 11080
